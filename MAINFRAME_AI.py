@@ -1,0 +1,1906 @@
+# GENAIV1_CLAUDE.py — Mainframe Modernization AI Assistant (PRO VERSION)
+# ========================================================================
+
+import io
+import os
+import zipfile
+from datetime import datetime
+from functools import lru_cache
+from typing import Optional, List, Tuple
+import pandas as pd
+import streamlit as st
+
+# ==== LLM client ====
+try:
+    from langchain_anthropic import ChatAnthropic
+    CLAUDE_AVAILABLE = True
+except ImportError:
+    ChatAnthropic = None
+    CLAUDE_AVAILABLE = False
+
+# ==== Langchain utils ====
+try:
+    from langchain_openai import OpenAIEmbeddings
+    from langchain_community.vectorstores import FAISS
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_core.documents import Document as LCDocument
+    from langchain_core.prompts import PromptTemplate
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    OpenAIEmbeddings = None
+    FAISS = None
+    LANGCHAIN_AVAILABLE = False
+
+# ===================== CONFIGURATION =====================
+st.set_page_config(
+    page_title="Assistant AI Mainframe Pro",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+# ===================== SESSION STATE INITIALIZATION =====================
+if 'rgc_analysis_result' not in st.session_state:
+    st.session_state.rgc_analysis_result = None
+if 'rgc_df_config' not in st.session_state:
+    st.session_state.rgc_df_config = None
+if 'rgc_resume_raw' not in st.session_state:
+    st.session_state.rgc_resume_raw = None
+if 'rgc_stats_dict' not in st.session_state:
+    st.session_state.rgc_stats_dict = None
+if 'rgc_uploaded_filename' not in st.session_state:
+    st.session_state.rgc_uploaded_filename = None
+if 'show_advanced_analysis' not in st.session_state:
+    st.session_state.show_advanced_analysis = False
+# ===================== CUSTOM CSS PRO =====================
+st.markdown("""
+<style>
+    /* ===== THEME PRINCIPAL ===== */
+    :root {
+        --primary-color: #4EA3FF;
+        --secondary-color: #0066CC;
+        --accent-color: #00D4FF;
+        --bg-dark: #0E1117;
+        --bg-card: #1E1E2E;
+        --text-primary: #FFFFFF;
+        --text-secondary: #B8B8C8;
+        --success: #00D9A5;
+        --warning: #FFB020;
+        --error: #FF4757;
+    }
+    
+    /* ===== BACKGROUND ===== */
+    .stApp {
+        background: linear-gradient(135deg, #0E1117 0%, #1a1d29 100%);
+    }
+    
+    /* ===== HEADER PRO ===== */
+    .ai-header {
+        background: linear-gradient(135deg, #1E1E2E 0%, #2B2D3E 100%);
+        padding: 2rem;
+        border-radius: 16px;
+        text-align: center;
+        margin-bottom: 2rem;
+        box-shadow: 0 8px 32px rgba(78, 163, 255, 0.15);
+        border: 1px solid rgba(78, 163, 255, 0.2);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .ai-header::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 100%;
+        height: 100%;
+        background: linear-gradient(90deg, transparent, rgba(78, 163, 255, 0.1), transparent);
+        animation: shine 3s infinite;
+    }
+    
+    @keyframes shine {
+        0% { left: -100%; }
+        100% { left: 100%; }
+    }
+    
+    .ai-header h1 {
+        font-size: 2.5rem;
+        font-weight: 800;
+        margin: 0;
+        background: linear-gradient(135deg, #4EA3FF 0%, #00D4FF 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .ai-header .subtitle {
+        color: var(--text-secondary);
+        font-size: 1rem;
+        margin-top: 0.5rem;
+        font-weight: 300;
+        letter-spacing: 1px;
+    }
+    
+    /* ===== CARDS GLASSMORPHISM ===== */
+    .glass-card {
+        background: rgba(30, 30, 46, 0.7);
+        backdrop-filter: blur(10px);
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 1px solid rgba(78, 163, 255, 0.15);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        margin-bottom: 1.5rem;
+        transition: all 0.3s ease;
+    }
+    
+    .glass-card:hover {
+        border-color: rgba(78, 163, 255, 0.4);
+        box-shadow: 0 12px 40px rgba(78, 163, 255, 0.2);
+        transform: translateY(-2px);
+    }
+    
+    /* ===== INFO BOXES ===== */
+    .info-box {
+        background: linear-gradient(135deg, rgba(78, 163, 255, 0.1) 0%, rgba(0, 212, 255, 0.1) 100%);
+        border-left: 4px solid var(--primary-color);
+        padding: 1rem 1.5rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+        color: var(--text-primary);
+        font-size: 0.95rem;
+        line-height: 1.6;
+    }
+    
+    .success-box {
+        background: linear-gradient(135deg, rgba(0, 217, 165, 0.1) 0%, rgba(0, 255, 200, 0.1) 100%);
+        border-left-color: var(--success);
+    }
+    
+    .warning-box {
+        background: linear-gradient(135deg, rgba(255, 176, 32, 0.1) 0%, rgba(255, 200, 100, 0.1) 100%);
+        border-left-color: var(--warning);
+    }
+    
+    .error-box {
+        background: linear-gradient(135deg, rgba(255, 71, 87, 0.1) 0%, rgba(255, 100, 120, 0.1) 100%);
+        border-left-color: var(--error);
+    }
+    
+    /* ===== BUTTONS PRO ===== */
+    .stButton>button {
+        background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+        color: white;
+        font-weight: 600;
+        border-radius: 10px;
+        border: none;
+        padding: 0.75rem 2rem;
+        font-size: 1rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(78, 163, 255, 0.3);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    .stButton>button:hover {
+        background: linear-gradient(135deg, var(--secondary-color) 0%, var(--primary-color) 100%);
+        box-shadow: 0 6px 25px rgba(78, 163, 255, 0.5);
+        transform: translateY(-2px);
+    }
+    
+    .stButton>button:active {
+        transform: translateY(0);
+    }
+    
+    .stButton>button:disabled {
+        background: linear-gradient(135deg, #2a2a3a 0%, #3a3a4a 100%);
+        box-shadow: none;
+        opacity: 0.5;
+    }
+    
+    /* ===== SIDEBAR PRO ===== */
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1d29 0%, #0E1117 100%);
+        border-right: 1px solid rgba(78, 163, 255, 0.15);
+    }
+    
+    [data-testid="stSidebar"] .stRadio > label {
+        background: rgba(78, 163, 255, 0.05);
+        padding: 0.5rem 1rem;
+        border-radius: 8px;
+        margin: 0.25rem 0;
+        transition: all 0.2s ease;
+    }
+    
+    [data-testid="stSidebar"] .stRadio > label:hover {
+        background: rgba(78, 163, 255, 0.15);
+    }
+    
+    /* ===== INPUTS ===== */
+    .stTextInput input, .stTextArea textarea {
+        background: rgba(30, 30, 46, 0.6) !important;
+        border: 1px solid rgba(78, 163, 255, 0.3) !important;
+        border-radius: 8px !important;
+        color: var(--text-primary) !important;
+        padding: 0.75rem !important;
+        transition: all 0.3s ease !important;
+    }
+    
+    .stTextInput input:focus, .stTextArea textarea:focus {
+        border-color: var(--primary-color) !important;
+        box-shadow: 0 0 0 2px rgba(78, 163, 255, 0.2) !important;
+    }
+    
+    /* ===== FILE UPLOADER ===== */
+    [data-testid="stFileUploader"] {
+        background: rgba(30, 30, 46, 0.4);
+        border: 2px dashed rgba(78, 163, 255, 0.3);
+        border-radius: 12px;
+        padding: 2rem;
+        transition: all 0.3s ease;
+    }
+    
+    [data-testid="stFileUploader"]:hover {
+        border-color: var(--primary-color);
+        background: rgba(78, 163, 255, 0.05);
+    }
+    
+    /* ===== DATAFRAME ===== */
+    .stDataFrame {
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    
+    /* ===== CODE BLOCKS ===== */
+    .stCodeBlock {
+        border-radius: 12px;
+        border: 1px solid rgba(78, 163, 255, 0.2);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+    }
+    
+    /* ===== SPINNER ===== */
+    .stSpinner > div {
+        border-top-color: var(--primary-color) !important;
+    }
+    
+    /* ===== TABS ===== */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: rgba(30, 30, 46, 0.5);
+        padding: 0.5rem;
+        border-radius: 12px;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        background: transparent;
+        border-radius: 8px;
+        color: var(--text-secondary);
+        padding: 0.75rem 1.5rem;
+        transition: all 0.3s ease;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+        color: white;
+    }
+    
+    /* ===== FOOTER PRO ===== */
+    .footer-pro {
+        margin-top: 4rem;
+        padding: 2rem;
+        border-radius: 16px;
+        text-align: center;
+        background: linear-gradient(135deg, #1E1E2E 0%, #2B2D3E 100%);
+        border: 1px solid rgba(78, 163, 255, 0.2);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    
+    .footer-title {
+        color: var(--primary-color);
+        font-weight: 700;
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .footer-team {
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+        line-height: 1.8;
+    }
+    
+    .footer-team span {
+        color: var(--accent-color);
+        font-weight: 600;
+    }
+    
+    /* ===== ANIMATIONS ===== */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .glass-card, .info-box {
+        animation: fadeIn 0.5s ease-out;
+    }
+    
+    /* ===== RESPONSIVE ===== */
+    @media (max-width: 768px) {
+        .ai-header h1 {
+            font-size: 1.8rem;
+        }
+        
+        .glass-card {
+            padding: 1rem;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ===================== HEADER PRO =====================
+st.markdown("""
+<div class="ai-header">
+    <h1>🤖 Assistant AI Mainframe</h1>
+    <div class="subtitle">IBM A&T</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ===================== LANGUE =====================
+lang_choice = st.sidebar.selectbox(
+    "🌐 Language / Langue", 
+    ["Français", "English"], 
+    index=0,
+    help="Sélectionnez votre langue préférée"
+)
+LANG_FR = (lang_choice == "Français")
+
+def T(fr: str, en: str) -> str:
+    return fr if LANG_FR else en
+
+# ===================== API KEY =====================
+ANTHROPIC_API_KEY = st.secrets["ANTHROPIC_API_KEY"]
+
+
+
+if not CLAUDE_AVAILABLE or not ANTHROPIC_API_KEY:
+    st.markdown("""
+    <div class="error-box">
+        ⚠️ <strong>LLM Claude indisponible</strong><br>
+        Installez <code>langchain-anthropic</code> et configurez votre clé API
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+# ===================== PROMPT ENGINE =====================
+import yaml
+
+@lru_cache(maxsize=1)
+def load_prompt_engine(path: str = "PromptEngine.yaml") -> dict:
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return yaml.safe_load(f) or {}
+        else:
+            st.markdown(f"""
+            <div class="warning-box">
+                ℹ️ Fichier <code>{path}</code> introuvable. Utilisation des prompts par défaut.
+            </div>
+            """, unsafe_allow_html=True)
+            return {}
+    except Exception as e:
+        st.markdown(f"""
+        <div class="error-box">
+            ❌ Erreur lors du chargement de <code>{path}</code>: {e}
+        </div>
+        """, unsafe_allow_html=True)
+        return {}
+
+def get_prompt(section: str, lang_key: Optional[str] = None, **kwargs) -> str:
+    pe = load_prompt_engine()
+    defaults = pe.get("defaults", {})
+    invalid_message = defaults.get("invalid_message", "❌ Code invalide")
+    no_jcl = defaults.get("no_jcl_in_test_mode", "Ne pas générer de JCL")
+
+    if section == "ANALYSE_DOC":
+        node = pe.get("ANALYSE_DOC", {}).get("GENERIQUE", "")
+    elif lang_key:
+        node = pe.get(section, {}).get(lang_key.upper(), "")
+    else:
+        node = ""
+
+    if not node:
+        if section == "ANALYSE_DOC":
+            node = "Rôle: Analyste documentaire.\n{document_content}"
+        elif section == "JCL_GENERATION":
+            node = "Rôle: Expert JCL {lang}.\nCode:\n{source_code}"
+        else:
+            node = "Rôle: QA Test {lang}.\nModule:{module_base}\nCode:\n{source_code}"
+
+    try:
+        return node.format(
+            invalid_message=invalid_message,
+            no_jcl_in_test_mode=no_jcl,
+            **kwargs
+        )
+    except KeyError as e:
+        st.error(f"❌ Paramètre manquant: {e}")
+        return node
+
+# ===================== HELPERS =====================
+def llm_client(max_tokens: int = 4000, temperature: float = 0.2):
+    if not CLAUDE_AVAILABLE or not ANTHROPIC_API_KEY:
+        return None
+    try:
+        return ChatAnthropic(
+            api_key=ANTHROPIC_API_KEY,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model_name="claude-3-haiku-20240307"
+        )
+    except Exception as e:
+        st.error(f"❌ Erreur client Claude: {e}")
+        return None
+
+def _normalize_text(s: str) -> str:
+    return " ".join(s.replace("\r", "\n").split())
+
+def read_pdf_bytes(data: bytes) -> str:
+    try:
+        import PyPDF2
+        text = []
+        with io.BytesIO(data) as fh:
+            reader = PyPDF2.PdfReader(fh)
+            for page in reader.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text.append(extracted)
+        result = _normalize_text("\n".join(text))
+        if result.strip():
+            return result
+    except:
+        pass
+    
+    try:
+        import pdfplumber
+        text = []
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages:
+                extracted = page.extract_text()
+                if extracted:
+                    text.append(extracted)
+        return _normalize_text("\n".join(text))
+    except:
+        return ""
+
+def read_docx_bytes(data: bytes) -> str:
+    try:
+        import docx
+        with io.BytesIO(data) as fh:
+            doc = docx.Document(fh)
+            return _normalize_text("\n".join(p.text for p in doc.paragraphs))
+    except:
+        return ""
+
+def read_txt_bytes(data: bytes, encoding: str = "utf-8") -> str:
+    try:
+        return _normalize_text(data.decode(encoding, errors="ignore"))
+    except:
+        return ""
+
+def extract_document_content(uploaded_file) -> str:
+    if not uploaded_file:
+        return ""
+    
+    name = (uploaded_file.name or "").lower()
+    
+    try:
+        raw = uploaded_file.read()
+    except Exception as e:
+        st.error(f"❌ Erreur de lecture: {e}")
+        return ""
+
+    def safe_truncate(text: str, max_chars: int = 150_000) -> str:
+        if len(text) > max_chars:
+            st.markdown(f"""
+            <div class="warning-box">
+                ⚠️ Contenu tronqué à {max_chars:,} caractères
+            </div>
+            """, unsafe_allow_html=True)
+        return text[:max_chars]
+
+    if name.endswith(".pdf"):
+        return safe_truncate(read_pdf_bytes(raw))
+    if name.endswith(".docx"):
+        return safe_truncate(read_docx_bytes(raw))
+    if name.endswith(".txt"):
+        return safe_truncate(read_txt_bytes(raw))
+
+    if name.endswith(".zip"):
+        texts = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                for info in z.infolist():
+                    n = info.filename.lower()
+                    if n.endswith((".pdf", ".docx", ".txt")) and not info.is_dir():
+                        try:
+                            data = z.read(info)
+                            if n.endswith(".pdf"):
+                                texts.append(read_pdf_bytes(data))
+                            elif n.endswith(".docx"):
+                                texts.append(read_docx_bytes(data))
+                            elif n.endswith(".txt"):
+                                texts.append(read_txt_bytes(data))
+                            
+                            if sum(len(t) for t in texts) > 200_000:
+                                break
+                        except Exception as e:
+                            st.warning(f"⚠️ Impossible de lire {info.filename}")
+                            continue
+        except zipfile.BadZipFile:
+            st.markdown("""
+            <div class="error-box">
+                ❌ Fichier ZIP invalide ou corrompu
+            </div>
+            """, unsafe_allow_html=True)
+            return ""
+        
+        return safe_truncate("\n\n---\n\n".join(t for t in texts if t.strip()))
+
+    return ""
+def detect_critical_conflicts(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Post-traitement pour garantir la détection des conflits critiques
+    même si le LLM les a manqués.
+    """
+    if df.empty or 'Nom Programme' not in df.columns:
+        return df
+    
+    # Colonnes nécessaires
+    required_cols = ['Nom Programme', 'Environnement', 'Couloir', 'Niveau de Risque']
+    if not all(col in df.columns for col in required_cols):
+        return df
+    
+    # Créer une clé unique Environment + Couloir
+    df['_env_couloir_key'] = df['Environnement'].astype(str) + '_' + df['Couloir'].astype(str)
+    
+    # Grouper par Programme
+    for prog_name, group in df.groupby('Nom Programme'):
+        if len(group) > 1:
+            # Vérifier les doublons Environment + Couloir
+            duplicates = group[group.duplicated(subset=['_env_couloir_key'], keep=False)]
+            
+            if not duplicates.empty:
+                # CONFLIT CRITIQUE détecté
+                indices = duplicates.index
+                for idx in indices:
+                    df.at[idx, 'Niveau de Risque'] = '🚨 Conflit de duplication dans le même environnement'
+            else:
+                # Pas de conflit critique, vérifier multi-env
+                unique_envs = group['Environnement'].nunique()
+                unique_couloirs = group['Couloir'].nunique()
+                
+                if unique_envs > 1:
+                    # Multi-environnements
+                    for idx in group.index:
+                        current_risk = df.at[idx, 'Niveau de Risque']
+                        if '🚨' not in str(current_risk):  # Ne pas écraser les critiques
+                            df.at[idx, 'Niveau de Risque'] = '⚠️ Programme dupliqué (multi-environnements)'
+                elif unique_couloirs > 1:
+                    # Multi-couloir même env
+                    for idx in group.index:
+                        current_risk = df.at[idx, 'Niveau de Risque']
+                        if '🚨' not in str(current_risk):
+                            df.at[idx, 'Niveau de Risque'] = '⚠️ Risque de modification (multi-couloir)'
+    
+    # Nettoyer la colonne temporaire
+    df.drop(columns=['_env_couloir_key'], inplace=True)
+    
+    return df
+# ===================== UI LABELS =====================
+
+TEXTS = {
+    "Français": {
+        "choose_mode": "⚙️ Mode de traitement",
+        "modes": [
+            "📄 Analyse documentaire", 
+            "🔧 Génération JCL", 
+            "🧪 Test COBOL",
+            "⚙️ Analyse RGC"  # ← NOUVEAU
+        ],
+    },
+    "English": {
+        "choose_mode": "⚙️ Processing Mode",
+        "modes": [
+            "📄 Document Analysis", 
+            "🔧 JCL Generation", 
+            "🧪 COBOL Testing",
+            "⚙️ RGC Analysis"  # ← NOUVEAU
+        ],
+    }
+}
+TXT = TEXTS["Français"] if LANG_FR else TEXTS["English"]
+
+# ===================== MODE SELECTOR =====================
+st.sidebar.markdown("---")
+mode = st.sidebar.radio(
+    TXT["choose_mode"], 
+    TXT["modes"], 
+    index=0,
+    help=T("Sélectionnez le mode de traitement souhaité", "Select your processing mode")
+)
+
+# ===================== MODE 1 : ANALYSE DOC =====================
+if mode == TXT["modes"][0]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header(T("📄 Analyse Documentaire Intelligente", "📄 Intelligent Document Analysis"))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Upload section
+    col1, col2 = st.columns(2)
+    with col1:
+        uploaded_zip = st.file_uploader(
+            "📦 " + T("Fichier ZIP", "ZIP File"),
+            type=["zip"],
+            help=T("Charger un fichier ZIP contenant des documents", "Upload a ZIP file with documents")
+        )
+    with col2:
+        uploaded_pdfs = st.file_uploader(
+            "📄 " + T("Fichiers PDF", "PDF Files"),
+            type=["pdf"],
+            accept_multiple_files=True,
+            help=T("Charger un ou plusieurs PDFs", "Upload one or more PDFs")
+        )
+
+    pdf_buffers: List[Tuple[str, bytes]] = []
+    
+    if uploaded_zip or uploaded_pdfs:
+        with st.spinner(T("📚 Traitement des documents...", "📚 Processing documents...")):
+            if uploaded_zip:
+                try:
+                    with zipfile.ZipFile(uploaded_zip, "r") as zip_ref:
+                        for name in zip_ref.namelist():
+                            if name.lower().endswith(".pdf") and not name.startswith("__MACOSX"):
+                                try:
+                                    with zip_ref.open(name) as pdf_file:
+                                        pdf_buffers.append((name, pdf_file.read()))
+                                except Exception as e:
+                                    st.warning(f"⚠️ {name}: {e}")
+                except zipfile.BadZipFile:
+                    st.markdown('<div class="error-box">❌ ZIP invalide</div>', unsafe_allow_html=True)
+            
+            if uploaded_pdfs:
+                for f in uploaded_pdfs:
+                    try:
+                        pdf_buffers.append((f.name, f.read()))
+                    except Exception as e:
+                        st.warning(f"⚠️ {f.name}: {e}")
+    
+    if pdf_buffers:
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ <strong>{len(pdf_buffers)} document(s) chargé(s)</strong>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Analysis context
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    context_mode = st.radio(
+        "🎯 " + T("Contexte d'analyse", "Analysis Context"),
+        [T("Analyse Générique", "Generic Analysis"),
+         T("Analyse CV / Profil", "CV / Profile Analysis")],
+        horizontal=True
+    )
+
+    question = st.text_area(
+        "💬 " + T("Votre question", "Your question"),
+        placeholder=T(
+            "Ex: Quelles sont les compétences principales ?",
+            "Ex: What are the main skills?"
+        ),
+        height=100
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    if st.button(
+        "🚀 " + T("ANALYSER", "ANALYZE"), 
+        disabled=not question or not pdf_buffers,
+        use_container_width=True
+    ):
+        if not pdf_buffers:
+            st.markdown('<div class="error-box">❌ Aucun document chargé</div>', unsafe_allow_html=True)
+        else:
+            texts = []
+            for name, raw in pdf_buffers:
+                extracted = read_pdf_bytes(raw)
+                if extracted.strip():
+                    texts.append(f"=== {name} ===\n{extracted}")
+            
+            document_content = "\n\n---\n\n".join(texts)[:150_000]
+
+            if not document_content.strip():
+                st.markdown('<div class="error-box">❌ Aucun texte extrait</div>', unsafe_allow_html=True)
+            else:
+                if "CV" in context_mode or "Profile" in context_mode:
+                    prompt_text = f"""
+Tu es une IA experte en analyse de CV et matching de profils.
+
+**Mission :**
+- Analyse approfondie des documents fournis
+- Identification des compétences (explicites et implicites)
+- Évaluation complète avant réponse
+- Aucun détail important omis
+
+**Format de réponse :**
+1. Réponse directe
+2. Détails et justifications
+3. Score (si applicable) : X/100
+4. Recommandations
+
+**Question :** {question}
+
+**Documents :**
+{document_content}
+"""
+                else:
+                    prompt_text = f"""
+    Rôle : Vous êtes un Analyste Stratégique Expert, spécialisé dans l'interprétation, l'analyse et la projection d'informations basées sur des documents.
+
+    Objectif Principal : Répondre aux questions en utilisant le contenu des documents fournis, mais en allant au-delà de la simple extraction. Vous devez analyser, synthétiser et générer des réponses déductives pour éclairer l'utilisateur sur des conséquences ou des scénarios non explicitement mentionnés.
+
+    Instructions de Traitement et d'Intelligence
+    Analyse Complète et Déduction : Lisez tous les documents. Vous devez non seulement extraire les faits, mais aussi déduire, interpréter et extrapoler des conclusions logiques et plausibles basées sur ces faits.
+ 
+    Génération de Contenu : Vous êtes autorisé à inventer des réponses (dans le sens de créer des analyses, des rapports, des projections ou des scénarios) à condition qu'elles soient directement et logiquement justifiées par les données présentes dans les documents fournis.
+
+    Synthèse Stratégique : Si la question le demande (ex: "Quel impact cela pourrait-il avoir ?", "Quelle est la tendance ?"), combinez les informations de manière créative pour générer une réponse stratégique.
+
+    Capacités Avancées : Utilisez des calculs (projections, tendances, pourcentages) et des comparaisons avancées pour étayer vos déductions.
+
+    Contraintes de Réponse
+    Lien avec le Contexte : Toute déduction ou invention doit rester étroitement liée au contexte des documents. Si vous créez une nouvelle information, elle doit être une conséquence logique et clairement étayée par le texte source.
+
+    Absence d'Information Justificative : Si la question nécessite une déduction ou une invention qui ne peut pas être logiquement justifiée par les documents, vous devez répondre strictement par la phrase suivante, et rien d'autre :
+
+    "Information ou déduction non justifiée par les documents analysés."
+
+    Format d'Analyse : Structurez vos réponses de manière claire, concise et professionnelle :
+
+    Utilisez des listes numérotées ou à puces pour les extractions de faits.
+
+    Séparez clairement les Faits Extraits des Déductions/Scénarios Proposés.
+
+    Mettez en gras les faits critiques et les conclusions déductives.
+    
+    CONTENU CV :
+    {document_content}
+                    """
+
+                client = llm_client(max_tokens=3000, temperature=0.2)
+                if not client:
+                    st.markdown('<div class="error-box">❌ Client LLM indisponible</div>', unsafe_allow_html=True)
+                else:
+                    with st.spinner(T("🧠 Analyse en cours...", "🧠 Analyzing...")):
+                        try:
+                            response = client.invoke(prompt_text)
+                            result = response.content if hasattr(response, 'content') else str(response)
+                        except Exception as e:
+                            st.error(f"❌ Erreur LLM: {e}")
+                            result = None
+
+                    if result:
+                        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                        st.subheader("🧠 " + T("Réponse de l'IA", "AI Answer"))
+                        st.markdown(result)
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                        # Export
+                        try:
+                            from docx import Document
+                            doc = Document()
+                            doc.add_heading(T("Rapport d'Analyse IA", "AI Analysis Report"), 0)
+                            doc.add_heading(T("Question", "Question"), 1)
+                            doc.add_paragraph(question)
+                            doc.add_heading(T("Réponse", "Answer"), 1)
+                            doc.add_paragraph(result)
+                            
+                            buf = io.BytesIO()
+                            doc.save(buf)
+                            buf.seek(0)
+                            
+                            st.download_button(
+                                "📥 " + T("Télécharger Rapport (Word)", "Download Report (Word)"),
+                                data=buf,
+                                file_name=T("rapport_analyse.docx", "analysis_report.docx"),
+                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                use_container_width=True
+                            )
+                        except ImportError:
+                            st.download_button(
+                                "📥 " + T("Télécharger Rapport (TXT)", "Download Report (TXT)"),
+                                data=result.encode("utf-8"),
+                                file_name=T("rapport_analyse.txt", "analysis_report.txt"),
+                                use_container_width=True
+                            )
+
+# ===================== MODE 2 : JCL GENERATION =====================
+elif mode == TXT["modes"][1]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("🔧 " + T("Générateur JCL Automatique", "Automatic JCL Generator"))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "📂 " + T("Fichier programme", "Program file"),
+        type=["cbl", "cob", "pli", "pl1", "asm"],
+        help=T("Sélectionnez votre fichier COBOL/PL/I/ASM", "Select your COBOL/PL/I/ASM file")
+    )
+    
+    if uploaded_file:
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ Fichier chargé : <strong>{uploaded_file.name}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("⚙️ " + T("Paramètres z/OS", "z/OS Parameters"))
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        job_name = st.text_input("🧾 JOB", value="GENJOB1")
+        program_name = st.text_input("🏷️ " + T("Programme", "Program"), value="PROGTEST")
+    with col2:
+        pds_source = st.text_input("📁 PDS Source", value="MYUSER.COBOL.SOURCE")
+        loadlib = st.text_input("💾 LOADLIB", value="MYUSER.COBOL.LOAD")
+    with col3:
+        sysout_class = st.text_input("🖨️ SYSOUT", value="A")
+        region_size = st.text_input("💽 REGION", value="4096K")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="info-box">
+        📊 <strong>Configuration :</strong> JOB={job_name} | PGM={program_name} | PDS={pds_source}
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button(
+        "🚀 " + T("GÉNÉRER JCL", "GENERATE JCL"),
+        disabled=not uploaded_file,
+        use_container_width=True
+    ):
+        file_name = uploaded_file.name
+        ext = file_name.split(".")[-1].lower()
+        
+        try:
+            source_code = uploaded_file.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            st.error(f"❌ Erreur: {e}")
+            st.stop()
+
+        lang_map = {"cbl": "COBOL", "cob": "COBOL", "pli": "PL/I", "pl1": "PL/I", "asm": "ASM"}
+        lang = lang_map.get(ext)
+
+        if not lang:
+            st.markdown('<div class="error-box">⚠️ Type non supporté</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="info-box">
+                🔍 Type détecté : <strong>{lang}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            prompt_text = get_prompt(
+                "JCL_GENERATION", lang,
+                source_code=source_code,
+                job_name=job_name,
+                program_name=program_name,
+                pds_source=pds_source,
+                loadlib=loadlib,
+                sysout_class=sysout_class,
+                region_size=region_size
+            )
+            
+            client = llm_client(max_tokens=2500, temperature=0.3)
+            if client:
+                with st.spinner(T("🧠 Génération du JCL...", "🧠 Generating JCL...")):
+                    try:
+                        response = client.invoke(prompt_text)
+                        result = response.content if hasattr(response, 'content') else str(response)
+                        
+                        if result:
+                            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                            st.subheader("📘 " + T("JCL Généré", "Generated JCL"))
+                            st.code(result, language="jcl")
+                            st.markdown('</div>', unsafe_allow_html=True)
+                            
+                            st.download_button(
+                                "💾 " + T("Télécharger JCL", "Download JCL"),
+                                data=result.encode("utf-8"),
+                                file_name=f"job_{lang.lower()}.jcl",
+                                use_container_width=True
+                            )
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {e}")
+
+# ===================== MODE 3 : COBOL TEST =====================
+elif mode == TXT["modes"][2]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("🧪 " + T("Générateur de Tests COBOL", "COBOL Test Generator"))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    uploaded_file = st.file_uploader(
+        "📂 " + T("Module source", "Source module"),
+        type=["cbl", "cob", "pli", "pl1", "asm"],
+        help=T("Sélectionnez votre module", "Select your module")
+    )
+    
+    if uploaded_file:
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ Module chargé : <strong>{uploaded_file.name}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+
+        file_name = uploaded_file.name
+        module_base = file_name.rsplit('.', 1)[0]
+        ext = file_name.split(".")[-1].lower()
+        
+        try:
+            source_code = uploaded_file.read().decode("utf-8", errors="ignore")
+        except Exception as e:
+            st.error(f"❌ Erreur: {e}")
+            st.stop()
+
+        lang_map = {"cbl": "COBOL", "cob": "COBOL", "pli": "PL/I", "pl1": "PL/I", "asm": "ASM"}
+        language_type = lang_map.get(ext)
+
+        if not language_type:
+            st.markdown('<div class="error-box">⚠️ Type non supporté</div>', unsafe_allow_html=True)
+            st.stop()
+
+        module_starts_ok = module_base.upper().startswith("M")
+        if not module_starts_ok:
+            st.markdown(f"""
+            <div class="warning-box">
+                ℹ️ Le nom du module doit commencer par <strong>M</strong><br>
+                Exemple : <code>MTRAITSIM.cbl</code>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        default_test_name = (module_base.upper() + "TEST")
+        if not default_test_name.startswith("M"):
+            default_test_name = "M" + default_test_name
+        default_test_name = "".join(ch for ch in default_test_name if ch.isalnum())[:8]
+
+        test_prog_name = st.text_input(
+            "🏷️ " + T("Nom du programme de test", "Test program name"),
+            value=default_test_name,
+            help=T("Commence par 'M', max 8 caractères", "Starts with 'M', max 8 chars")
+        ).upper()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        def valid_prog_name(name: str) -> Tuple[bool, str]:
+            if not name:
+                return False, T("Nom vide", "Empty name")
+            if len(name) > 8:
+                return False, T("Plus de 8 caractères", "More than 8 chars")
+            if name[0] != "B":
+                return False, T("Doit commencer par 'B'", "Must start with 'B'")
+            if not all(ch.isalnum() for ch in name):
+                return False, T("Caractères invalides", "Invalid characters")
+            return True, ""
+
+        ok_name, err_name = valid_prog_name(test_prog_name)
+        if not ok_name:
+            st.markdown(f"""
+            <div class="warning-box">
+                ℹ️ Nom invalide : {err_name}
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="info-box">
+            🔍 Type : <strong>{language_type}</strong> | Programme test : <strong>{test_prog_name}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+
+        gen_disabled = not module_starts_ok or not ok_name
+        
+        if st.button(
+            "🚀 " + T("GÉNÉRER TEST + SCÉNARIOS", "GENERATE TEST + SCENARIOS"),
+            disabled=gen_disabled,
+            use_container_width=True
+        ):
+            prompt_text = get_prompt(
+                "TEST_FACTORY", language_type,
+                source_code=source_code,
+                module_base=module_base,
+                test_prog_name=test_prog_name
+            )
+            
+            client = llm_client(max_tokens=4000, temperature=0.2)
+            if client:
+                with st.spinner(T("🧠 Génération en cours...", "🧠 Generating...")):
+                    try:
+                        response = client.invoke(prompt_text)
+                        result = response.content if hasattr(response, 'content') else str(response)
+                        
+                        if result:
+                            # Parse sections
+                            cobol_test, cases_raw = "", ""
+                            if "=== COBOL_TEST ===" in result:
+                                after = result.split("=== COBOL_TEST ===", 1)[1]
+                                if "=== CAS_DE_TEST ===" in after:
+                                    cobol_test, cases_raw = after.split("=== CAS_DE_TEST ===", 1)
+                                else:
+                                    cobol_test = after
+
+                            cobol_test_clean = cobol_test.strip()
+                            
+                            # Header injection
+                            AUTHOR_NAME = "AYMANE"
+                            DATE_STR = datetime.now().strftime("%Y/%m/%d")
+                            header = f"""      *> PROGRAM-ID : {test_prog_name}
+      *> AUTHOR     : {AUTHOR_NAME}
+      *> DATE       : {DATE_STR}
+"""
+                            cobol_with_header = header + cobol_test_clean if cobol_test_clean else ""
+
+                            # Display COBOL
+                            if cobol_with_header:
+                                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                                st.subheader("📘 " + T("Programme COBOL de test", "COBOL Test Program"))
+                                st.code(cobol_with_header, language="cobol")
+                                st.markdown('</div>', unsafe_allow_html=True)
+                                
+                                st.download_button(
+                                    "💾 " + T("Télécharger COBOL (.cbl)", "Download COBOL (.cbl)"),
+                                    data=cobol_with_header.encode("utf-8"),
+                                    file_name=f"{test_prog_name}.cbl",
+                                    use_container_width=True
+                                )
+
+                            # Parse scenarios
+                            rows, headers = [], []
+                            for ln in cases_raw.splitlines():
+                                line = ln.strip()
+                                if not line or line.startswith("#"):
+                                    continue
+                                parts = [c.strip() for c in line.split("|")]
+                                if not headers and "Nom_Scenario" in line:
+                                    headers = parts
+                                    continue
+                                if headers and len(parts) == len(headers):
+                                    rows.append(parts)
+
+                            if headers and rows:
+                                df_cases = pd.DataFrame(rows, columns=headers)
+                            else:
+                                df_cases = pd.DataFrame(columns=[
+                                    "Nom_Scenario", "Condition_Entree", "Donnees_Exemple",
+                                    "Resultat_Attendu", "RC_Attendu", "Artefacts_Impactes", "Commentaires"
+                                ])
+
+                            # Display matrix
+                            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                            st.subheader("🧾 " + T("Matrice de scénarios", "Scenario Matrix"))
+                            
+                            if not df_cases.empty:
+                                st.dataframe(df_cases, use_container_width=True, height=400)
+                            else:
+                                st.warning(T("Aucun scénario détecté", "No scenarios detected"))
+                            
+                            st.markdown('</div>', unsafe_allow_html=True)
+
+                            # Export Excel
+                            scenarios_name = f"SCENARIOS_{module_base}"
+                            excel_buf = io.BytesIO()
+                            
+                            try:
+                                with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
+                                    df_cases.to_excel(writer, index=False, sheet_name="SCENARIOS")
+                                excel_buf.seek(0)
+                                
+                                st.download_button(
+                                    "📥 " + T("Télécharger Scénarios (Excel)", "Download Scenarios (Excel)"),
+                                    data=excel_buf,
+                                    file_name=f"{scenarios_name}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True
+                                )
+                            except ImportError:
+                                csv_buf = io.BytesIO()
+                                df_cases.to_csv(csv_buf, index=False, encoding="utf-8")
+                                csv_buf.seek(0)
+                                
+                                st.download_button(
+                                    "📥 " + T("Télécharger Scénarios (CSV)", "Download Scenarios (CSV)"),
+                                    data=csv_buf,
+                                    file_name=f"{scenarios_name}.csv",
+                                    use_container_width=True
+                                )
+                                
+                    except Exception as e:
+                        st.error(f"❌ Erreur: {e}")
+# ===================== MODE 4 : RGC ANALYSIS =====================
+# ===================== MODE 4 : RGC SCM ANALYSIS =================                  
+# ===================== MODE 4 : RGC SCM ANALYSIS (AVEC PERSISTANCE) =====================
+elif mode == TXT["modes"][3]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("⚙️ " + T("Analyse RGC - Gestion de Configuration Logicielle", "RGC Analysis - Software Configuration Management"))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-box">
+        📊 <strong>Mode RGC Expert - SCM/RCM</strong><br>
+        Analysez vos fichiers de configuration de programmes mainframe avec détection automatique des risques :<br>
+        • Programmes dupliqués multi-environnements<br>
+        • Conflits de couloir<br>
+        • Alertes critiques de duplication<br>
+        <br>
+        <strong>Génération automatique :</strong> Tableau Excel + Résumé des risques + Métriques
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Upload section
+    uploaded_config = st.file_uploader(
+        "📄 " + T("Fichier de configuration programmes (.txt)", "Program configuration file (.txt)"),
+        type=["txt"],
+        help=T(
+            "Format attendu : Nom_Programme | Type | Date_Création | Date_Modif | Environnement | Couloir | Modifié_Par",
+            "Expected format: Program_Name | Type | Creation_Date | Modif_Date | Environment | Couloir | Modified_By"
+        ),
+        key="rgc_file_uploader"
+    )
+
+    if uploaded_config:
+        # Vérifier si c'est un nouveau fichier
+        if st.session_state.rgc_uploaded_filename != uploaded_config.name:
+            st.session_state.rgc_uploaded_filename = uploaded_config.name
+            # Réinitialiser les résultats pour un nouveau fichier
+            st.session_state.rgc_analysis_result = None
+            st.session_state.rgc_df_config = None
+            st.session_state.rgc_resume_raw = None
+            st.session_state.rgc_stats_dict = None
+            st.session_state.show_advanced_analysis = False
+        
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ Fichier chargé : <strong>{uploaded_config.name}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Preview du fichier
+        try:
+            preview_content = uploaded_config.read().decode("utf-8", errors="ignore")
+            uploaded_config.seek(0)  # Reset pour relecture
+            
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("👁️ " + T("Aperçu du fichier", "File Preview"))
+            preview_lines = preview_content.split('\n')[:10]
+            st.code('\n'.join(preview_lines), language="text")
+            if len(preview_content.split('\n')) > 10:
+                st.caption(f"... ({len(preview_content.split('\n')) - 10} lignes supplémentaires)")
+            st.markdown('</div>', unsafe_allow_html=True)
+        except:
+            pass
+
+        # Options d'analyse
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("🎯 " + T("Options d'analyse", "Analysis Options"))
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            detect_duplicates = st.checkbox(
+                "🔍 " + T("Détection doublons", "Duplicate detection"),
+                value=True,
+                help=T("Identifier les programmes présents dans plusieurs environnements", 
+                       "Identify programs in multiple environments"),
+                key="rgc_detect_dup"
+            )
+        with col2:
+            detect_conflicts = st.checkbox(
+                "🚨 " + T("Alertes critiques", "Critical alerts"),
+                value=True,
+                help=T("Détecter les conflits dans le même env/couloir", 
+                       "Detect conflicts in same env/couloir"),
+                key="rgc_detect_conflicts"
+            )
+        with col3:
+            generate_metrics = st.checkbox(
+                "📊 " + T("Métriques détaillées", "Detailed metrics"),
+                value=True,
+                help=T("Générer distributions et analyses", 
+                       "Generate distributions and analysis"),
+                key="rgc_gen_metrics"
+            )
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Bouton d'analyse
+        analyze_button = st.button(
+            "🚀 " + T("LANCER ANALYSE RGC", "START RGC ANALYSIS"),
+            use_container_width=True,
+            key="rgc_analyze_btn"
+        )
+
+        # Lancer l'analyse si le bouton est cliqué ET qu'il n'y a pas déjà de résultat
+        if analyze_button or st.session_state.rgc_analysis_result is not None:
+            
+            # Si nouveau clic, relancer l'analyse
+            if analyze_button:
+                try:
+                    uploaded_config.seek(0)
+                    config_content = uploaded_config.read().decode("utf-8", errors="ignore")
+                except Exception as e:
+                    st.error(f"❌ Erreur de lecture: {e}")
+                    st.stop()
+
+                if not config_content.strip():
+                    st.markdown('<div class="error-box">❌ Fichier vide</div>', unsafe_allow_html=True)
+                    st.stop()
+
+                # Préparer le prompt
+                prompt_text = get_prompt(
+                    "RGC_ANALYSIS",
+                    "SCM_CONFIG",
+                    config_content=config_content[:150_000]
+                )
+
+                client = llm_client(max_tokens=4000, temperature=0.1)
+                if not client:
+                    st.markdown('<div class="error-box">❌ Client LLM indisponible</div>', unsafe_allow_html=True)
+                    st.stop()
+
+                with st.spinner(T("🧠 Analyse RGC en cours...", "🧠 RGC Analysis in progress...")):
+                    try:
+                        response = client.invoke(prompt_text)
+                        result = response.content if hasattr(response, 'content') else str(response)
+                        
+                        # Stocker dans session_state
+                        st.session_state.rgc_analysis_result = result
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erreur LLM: {e}")
+                        st.stop()
+
+            # Récupérer le résultat depuis session_state
+            result = st.session_state.rgc_analysis_result
+
+            if result:
+                # ========== PARSING DES RÉSULTATS (une seule fois si pas déjà fait) ==========
+                if st.session_state.rgc_df_config is None:
+                    tableau_raw, resume_raw, stats_raw = "", "", ""
+                    
+                    if "=== TABLEAU_CONFIG ===" in result:
+                        parts = result.split("=== TABLEAU_CONFIG ===", 1)[1]
+                        if "=== RESUME_RISQUES ===" in parts:
+                            tableau_raw, rest = parts.split("=== RESUME_RISQUES ===", 1)
+                            if "=== STATISTIQUES ===" in rest:
+                                resume_raw, stats_raw = rest.split("=== STATISTIQUES ===", 1)
+                            else:
+                                resume_raw = rest
+                        else:
+                            tableau_raw = parts
+
+                    # ========== CONSTRUCTION DU DATAFRAME ==========
+                    rows, headers = [], []
+
+                    for line in tableau_raw.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("-") or line.startswith("="):
+                            continue
+                        
+                        parts = [c.strip() for c in line.split("|")]
+                        
+                        if len(parts) == 1 and not parts[0]:
+                            continue
+                        
+                        if not headers and len(parts) >= 8:
+                            headers = parts
+                            continue
+                        
+                        if headers and len(parts) == len(headers):
+                            rows.append(parts)
+
+                    # Si le LLM n'a pas ajouté la colonne N°, on l'ajoute
+                    if headers and rows:
+                        if headers[0] != "N°":
+                            headers.insert(0, "N°")
+                            for idx, row in enumerate(rows, start=1):
+                                row.insert(0, str(idx))
+                        
+                        df_config = pd.DataFrame(rows, columns=headers)
+                        
+                        # POST-TRAITEMENT CRITIQUE
+                        df_config = detect_critical_conflicts(df_config)
+                    else:
+                        df_config = pd.DataFrame(columns=[
+                            "N°", "Nom Programme", "Type de Programme", "Date Création", 
+                            "Date Modification", "Environnement", "Couloir", 
+                            "Modifié Par", "Niveau de Risque"
+                        ])
+
+                    # Parser les stats
+                    stats_dict = {}
+                    for line in stats_raw.splitlines():
+                        if ":" in line:
+                            key, val = line.split(":", 1)
+                            stats_dict[key.strip()] = val.strip()
+
+                    # Stocker dans session_state
+                    st.session_state.rgc_df_config = df_config
+                    st.session_state.rgc_resume_raw = resume_raw
+                    st.session_state.rgc_stats_dict = stats_dict
+                else:
+                    # Récupérer depuis session_state
+                    df_config = st.session_state.rgc_df_config
+                    resume_raw = st.session_state.rgc_resume_raw
+                    stats_dict = st.session_state.rgc_stats_dict
+
+                # ========== AFFICHAGE TABLEAU PRINCIPAL ==========
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.subheader("📊 " + T("Tableau de Configuration", "Configuration Table"))
+                
+                if not df_config.empty:
+                    # Style conditionnel
+                    def color_risk(val):
+                        if pd.isna(val) or val == "—":
+                            return ''
+                        elif "🚨" in str(val):
+                            return 'background-color: #FF4757; color: white; font-weight: bold;'
+                        elif "⚠️" in str(val):
+                            return 'background-color: #FFB020; color: black;'
+                        return ''
+                    
+                    styled_df = df_config.style.applymap(
+                        color_risk,
+                        subset=['Niveau de Risque'] if 'Niveau de Risque' in df_config.columns else []
+                    )
+                    
+                    st.dataframe(styled_df, use_container_width=True, height=500)
+                    
+                    # Compteurs corrigés
+                    if 'Niveau de Risque' in df_config.columns:
+                        total = len(df_config)
+                        critiques = df_config['Niveau de Risque'].str.contains('🚨', na=False, regex=False).sum()
+                        warnings = df_config['Niveau de Risque'].str.contains('⚠️', na=False, regex=False).sum()
+                        risques = critiques + warnings
+                        ok = total - risques
+                        
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("📦 Total Programmes", total)
+                        col2.metric("✅ OK", ok, delta=None if ok == total else f"-{risques}")
+                        col3.metric("⚠️ Warnings", warnings)
+                        col4.metric("🚨 CRITIQUES", critiques, delta_color="inverse")
+                else:
+                    st.warning(T("Aucune donnée détectée", "No data detected"))
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # ========== RÉSUMÉ DES RISQUES ==========
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.subheader("🔴 " + T("Résumé des Programmes à Risque", "Risk Programs Summary"))
+
+                risk_summary = []
+                if not df_config.empty and 'Niveau de Risque' in df_config.columns:
+                    for prog_name, group in df_config.groupby('Nom Programme'):
+                        risks = group['Niveau de Risque'].unique()
+                        has_risk = any('🚨' in str(r) or '⚠️' in str(r) for r in risks)
+                        
+                        if has_risk:
+                            if any('🚨' in str(r) for r in risks):
+                                env_couloir = group[['Environnement', 'Couloir']].drop_duplicates()
+                                occurrences = len(group)
+                                
+                                if len(env_couloir) == 1:
+                                    env = env_couloir.iloc[0]['Environnement']
+                                    couloir = env_couloir.iloc[0]['Couloir']
+                                    risk_summary.append(
+                                        f"🔴 {prog_name} : 🚨 Conflit de duplication dans le même environnement "
+                                        f"({env} / {couloir}) - {occurrences} occurrence(s) détectée(s)"
+                                    )
+                                else:
+                                    risk_summary.append(
+                                        f"🔴 {prog_name} : 🚨 Conflits multiples détectés - {occurrences} occurrence(s)"
+                                    )
+                            elif any('multi-environnements' in str(r) for r in risks):
+                                envs = group['Environnement'].unique()
+                                risk_summary.append(
+                                    f"🔴 {prog_name} : Existe dans {' et '.join(envs)} — "
+                                    f"Risque de modification inter-environnements"
+                                )
+                            elif any('multi-couloir' in str(r) for r in risks):
+                                env = group['Environnement'].iloc[0]
+                                couloirs = group['Couloir'].unique()
+                                risk_summary.append(
+                                    f"🔴 {prog_name} : Programme présent dans {env} avec couloirs différents "
+                                    f"({', '.join(couloirs)})"
+                                )
+
+                if risk_summary:
+                    for risk in risk_summary:
+                        if "🚨" in risk:
+                            st.markdown(f'<div class="error-box" style="margin: 0.5rem 0;">{risk}</div>', unsafe_allow_html=True)
+                        else:
+                            st.markdown(f'<div class="warning-box" style="margin: 0.5rem 0;">{risk}</div>', unsafe_allow_html=True)
+                else:
+                    st.success("✅ " + T("Aucun risque détecté", "No risk detected"))
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # ========== STATISTIQUES ==========
+                # ========== STATISTIQUES (RECALCULÉES DEPUIS LE DATAFRAME) ==========
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.subheader("📈 " + T("Statistiques", "Statistics"))
+
+                if not df_config.empty and 'Niveau de Risque' in df_config.columns:
+                    # Recalcul complet des statistiques
+                    total_programmes = len(df_config)
+                    
+                    # Compter les programmes uniques (pas les lignes)
+                    programmes_uniques = df_config['Nom Programme'].nunique() if 'Nom Programme' in df_config.columns else total_programmes
+                    
+                    # Compter les conflits critiques
+                    mask_critiques = df_config['Niveau de Risque'].str.contains('🚨', na=False, regex=False)
+                    conflits_critiques = mask_critiques.sum()
+                    programmes_critiques = df_config[mask_critiques]['Nom Programme'].nunique() if 'Nom Programme' in df_config.columns else conflits_critiques
+                    
+                    # Compter les warnings (sans les critiques)
+                    mask_warnings = df_config['Niveau de Risque'].str.contains('⚠️', na=False, regex=False) & ~mask_critiques
+                    warnings = mask_warnings.sum()
+                    programmes_warnings = df_config[mask_warnings]['Nom Programme'].nunique() if 'Nom Programme' in df_config.columns else warnings
+                    
+                    # Compter les OK
+                    mask_ok = df_config['Niveau de Risque'].str.contains('—', na=False, regex=False) | df_config['Niveau de Risque'].isna()
+                    programmes_ok = df_config[mask_ok]['Nom Programme'].nunique() if 'Nom Programme' in df_config.columns else mask_ok.sum()
+                    
+                    # Total à risque (lignes)
+                    total_risques = conflits_critiques + warnings
+                    
+                    # Programmes à risque (uniques)
+                    programmes_a_risque = programmes_critiques + programmes_warnings
+                    
+                    # Statistiques avancées
+                    stats_dict_recalc = {
+                        "Total_Lignes": str(total_programmes),
+                        "Programmes_Uniques": str(programmes_uniques),
+                        "Programmes_OK": str(programmes_ok),
+                        "Programmes_à_Risque": str(programmes_a_risque),
+                        "Conflits_Critiques": str(programmes_critiques),
+                        "Warnings": str(programmes_warnings)
+                    }
+                    
+                    # Statistiques par environnement
+                    if 'Environnement' in df_config.columns:
+                        env_stats = df_config['Environnement'].value_counts().to_dict()
+                        for env, count in env_stats.items():
+                            stats_dict_recalc[f"Prg_en_{env}"] = str(count)
+                    
+                    # Statistiques par type
+                    if 'Type de Programme' in df_config.columns:
+                        type_stats = df_config['Type de Programme'].value_counts().to_dict()
+                        for ptype, count in type_stats.items():
+                            stats_dict_recalc[f"Type_{ptype}"] = str(count)
+                    
+                    # Affichage en colonnes
+                    cols_per_row = 4
+                    stats_items = list(stats_dict_recalc.items())
+                    
+                    # Première ligne : Métriques principales
+                    main_metrics = ["Total_Lignes", "Programmes_Uniques", "Programmes_OK", "Programmes_à_Risque"]
+                    col_main = st.columns(4)
+                    for idx, key in enumerate(main_metrics):
+                        if key in stats_dict_recalc:
+                            with col_main[idx]:
+                                label = key.replace("_", " ")
+                                value = stats_dict_recalc[key]
+                                
+                                # Couleur selon le type de métrique
+                                if "Risque" in key or "Critiques" in key:
+                                    delta_color = "inverse"
+                                    delta = "⚠️" if int(value) > 0 else None
+                                elif "OK" in key:
+                                    delta_color = "normal"
+                                    delta = "✅" if int(value) > 0 else None
+                                else:
+                                    delta_color = "off"
+                                    delta = None
+                                
+                                st.metric(label=label, value=value, delta=delta, delta_color=delta_color)
+                    
+                    st.markdown("---")
+                    
+                    # Deuxième ligne : Détails des risques
+                    col_risk = st.columns(3)
+                    with col_risk[0]:
+                        st.metric(
+                            label="🚨 Conflits Critiques",
+                            value=stats_dict_recalc["Conflits_Critiques"],
+                            delta="URGENT" if int(stats_dict_recalc["Conflits_Critiques"]) > 0 else None,
+                            delta_color="inverse"
+                        )
+                    with col_risk[1]:
+                        st.metric(
+                            label="⚠️ Warnings",
+                            value=stats_dict_recalc["Warnings"],
+                            delta="À surveiller" if int(stats_dict_recalc["Warnings"]) > 0 else None,
+                            delta_color="inverse"
+                        )
+                    with col_risk[2]:
+                        # Calcul du taux de conformité
+                        taux_conformite = round((programmes_ok / programmes_uniques * 100) if programmes_uniques > 0 else 0, 1)
+                        st.metric(
+                            label="📊 Taux de Conformité",
+                            value=f"{taux_conformite}%",
+                            delta="Bon" if taux_conformite >= 80 else "À améliorer",
+                            delta_color="normal" if taux_conformite >= 80 else "inverse"
+                        )
+                    
+                    st.markdown("---")
+                    
+                    # Troisième ligne : Répartition par environnement
+                    if 'Environnement' in df_config.columns:
+                        st.markdown("**📍 Répartition par Environnement**")
+                        env_cols = st.columns(len(env_stats))
+                        for idx, (env, count) in enumerate(env_stats.items()):
+                            with env_cols[idx]:
+                                st.metric(label=env, value=count)
+                    
+                    st.markdown("---")
+                    
+                    # Quatrième ligne : Répartition par type
+                    if 'Type de Programme' in df_config.columns:
+                        st.markdown("**💻 Répartition par Langage**")
+                        type_cols = st.columns(len(type_stats))
+                        for idx, (ptype, count) in enumerate(type_stats.items()):
+                            with type_cols[idx]:
+                                st.metric(label=ptype, value=count)
+                    
+                    # Stocker les statistiques recalculées dans session_state
+                    st.session_state.rgc_stats_dict = stats_dict_recalc
+                    
+                else:
+                    st.info(T("Aucune statistique disponible", "No statistics available"))
+
+                st.markdown('</div>', unsafe_allow_html=True)
+                # ========== TABLEAU RÉCAPITULATIF DES RISQUES ==========
+                if not df_config.empty and 'Niveau de Risque' in df_config.columns:
+                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                    st.subheader("📋 " + T("Tableau Récapitulatif par Programme", "Summary Table by Program"))
+                    
+                    # Créer un résumé par programme
+                    summary_data = []
+                    
+                    for prog_name, group in df_config.groupby('Nom Programme'):
+                        nb_occurrences = len(group)
+                        
+                        # Environnements
+                        envs = group['Environnement'].unique() if 'Environnement' in group.columns else []
+                        nb_envs = len(envs)
+                        envs_str = ', '.join(envs)
+                        
+                        # Couloirs
+                        couloirs = group['Couloir'].unique() if 'Couloir' in group.columns else []
+                        nb_couloirs = len(couloirs)
+                        couloirs_str = ', '.join(couloirs)
+                        
+                        # Type de programme
+                        prog_type = group['Type de Programme'].iloc[0] if 'Type de Programme' in group.columns else 'N/A'
+                        
+                        # Déterminer le niveau de risque maximal
+                        risks = group['Niveau de Risque'].unique()
+                        if any('🚨' in str(r) for r in risks):
+                            risque_niveau = '🚨 CRITIQUE'
+                            risque_detail = 'Duplication même env/couloir'
+                        elif any('⚠️' in str(r) for r in risks):
+                            if nb_envs > 1:
+                                risque_niveau = '⚠️ WARNING'
+                                risque_detail = 'Multi-environnements'
+                            elif nb_couloirs > 1:
+                                risque_niveau = '⚠️ WARNING'
+                                risque_detail = 'Multi-couloirs'
+                            else:
+                                risque_niveau = '⚠️ WARNING'
+                                risque_detail = 'À vérifier'
+                        else:
+                            risque_niveau = '✅ OK'
+                            risque_detail = 'Conforme'
+                        
+                        # Dernière modification
+                        if 'Date Modification' in group.columns:
+                            dates = pd.to_datetime(group['Date Modification'], errors='coerce')
+                            derniere_modif = dates.max().strftime('%Y-%m-%d') if not dates.isna().all() else 'N/A'
+                        else:
+                            derniere_modif = 'N/A'
+                        
+                        # Développeurs
+                        devs = group['Modifié Par'].unique() if 'Modifié Par' in group.columns else []
+                        devs_str = ', '.join(devs)
+                        
+                        summary_data.append({
+                            'Programme': prog_name,
+                            'Type': prog_type,
+                            'Occurrences': nb_occurrences,
+                            'Environnements': envs_str,
+                            'Nb Env': nb_envs,
+                            'Couloirs': couloirs_str,
+                            'Nb Couloirs': nb_couloirs,
+                            'Risque': risque_niveau,
+                            'Détail Risque': risque_detail,
+                            'Dernière Modif': derniere_modif,
+                            'Développeurs': devs_str
+                        })
+                    
+                    df_summary = pd.DataFrame(summary_data)
+                    
+                    # Tri : Critiques en premier, puis Warnings, puis OK
+                    def sort_risk(row):
+                        if '🚨' in row['Risque']:
+                            return 0
+                        elif '⚠️' in row['Risque']:
+                            return 1
+                        else:
+                            return 2
+                    
+                    df_summary['_sort'] = df_summary.apply(sort_risk, axis=1)
+                    df_summary = df_summary.sort_values('_sort').drop(columns=['_sort'])
+                    
+                    # Style conditionnel
+                    def color_summary_risk(val):
+                        if '🚨' in str(val):
+                            return 'background-color: #FF4757; color: white; font-weight: bold;'
+                        elif '⚠️' in str(val):
+                            return 'background-color: #FFB020; color: black;'
+                        elif '✅' in str(val):
+                            return 'background-color: #00D9A5; color: white;'
+                        return ''
+                    
+                    styled_summary = df_summary.style.applymap(
+                        color_summary_risk,
+                        subset=['Risque']
+                    )
+                    
+                    st.dataframe(styled_summary, use_container_width=True, height=400)
+                    
+                    # Stocker le résumé dans session_state pour export
+                    st.session_state.rgc_df_summary = df_summary
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+                # ========== MÉTRIQUES AVANCÉES (avec bouton fonctionnel) ==========
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.subheader("🔍 " + T("Analyse Complémentaire", "Additional Analysis"))
+                
+                # Bouton pour afficher/masquer l'analyse avancée
+                if st.button(
+                    "📊 " + T(
+                        "Afficher/Masquer l'analyse approfondie (répartition env, langage, développeurs actifs)",
+                        "Show/Hide in-depth analysis (env distribution, language, active developers)"
+                    ),
+                    use_container_width=True,
+                    key="rgc_advanced_btn"
+                ):
+                    st.session_state.show_advanced_analysis = not st.session_state.show_advanced_analysis
+
+                st.markdown('</div>', unsafe_allow_html=True)
+
+                # Afficher l'analyse avancée si demandé
+                if st.session_state.show_advanced_analysis and generate_metrics and not df_config.empty:
+                    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                    st.subheader("📊 " + T("Analyses Avancées", "Advanced Analytics"))
+                    
+                    try:
+                        import matplotlib.pyplot as plt
+                        
+                        fig, axes = plt.subplots(2, 2, figsize=(16, 10))
+                        fig.patch.set_facecolor('#1E1E2E')
+                        
+                        # Graph 1 : Distribution par environnement
+                        if 'Environnement' in df_config.columns:
+                            env_counts = df_config['Environnement'].value_counts()
+                            colors_env = ['#00D9A5', '#4EA3FF', '#FFB020']
+                            axes[0, 0].pie(
+                                env_counts.values,
+                                labels=env_counts.index,
+                                autopct='%1.1f%%',
+                                colors=colors_env,
+                                textprops={'color': 'white', 'fontsize': 10}
+                            )
+                            axes[0, 0].set_title(
+                                T('Répartition par Environnement', 'Distribution by Environment'),
+                                color='white', fontsize=12, pad=20
+                            )
+                            axes[0, 0].set_facecolor('#262636')
+                        
+                        # Graph 2 : Distribution par langage
+                        if 'Type de Programme' in df_config.columns:
+                            lang_counts = df_config['Type de Programme'].value_counts()
+                            axes[0, 1].bar(
+                                lang_counts.index,
+                                lang_counts.values,
+                                color=['#4EA3FF', '#FF6B9D', '#A3FFD6']
+                            )
+                            axes[0, 1].set_title(
+                                T('Distribution par Langage', 'Distribution by Language'),
+                                color='white', fontsize=12, pad=20
+                            )
+                            axes[0, 1].set_ylabel(T('Nombre de programmes', 'Number of programs'), color='white')
+                            axes[0, 1].tick_params(colors='white')
+                            axes[0, 1].set_facecolor('#262636')
+                        
+                        # Graph 3 : Top développeurs actifs
+                        if 'Modifié Par' in df_config.columns:
+                            dev_counts = df_config['Modifié Par'].value_counts().head(10)
+                            axes[1, 0].barh(dev_counts.index, dev_counts.values, color='#FF6B9D')
+                            axes[1, 0].set_title(
+                                T('Top 10 Développeurs Actifs', 'Top 10 Active Developers'),
+                                color='white', fontsize=12, pad=20
+                            )
+                            axes[1, 0].set_xlabel(T('Nombre de modifications', 'Number of modifications'), color='white')
+                            axes[1, 0].tick_params(colors='white')
+                            axes[1, 0].set_facecolor('#262636')
+                        
+                        # Graph 4 : Niveaux de risque
+                        if 'Niveau de Risque' in df_config.columns:
+                            risk_categories = {
+                                'OK': df_config['Niveau de Risque'].str.contains('—', na=False).sum(),
+                                'Warning': df_config['Niveau de Risque'].str.contains('⚠️', na=False).sum() - df_config['Niveau de Risque'].str.contains('🚨', na=False).sum(),
+                                'Critical': df_config['Niveau de Risque'].str.contains('🚨', na=False).sum()
+                            }
+                            
+                            colors_risk = ['#00D9A5', '#FFB020', '#FF4757']
+                            axes[1, 1].bar(
+                                risk_categories.keys(),
+                                risk_categories.values(),
+                                color=colors_risk
+                            )
+                            axes[1, 1].set_title(
+                                T('Répartition des Risques', 'Risk Distribution'),
+                                color='white', fontsize=12, pad=20
+                            )
+                            axes[1, 1].set_ylabel(T('Nombre de programmes', 'Number of programs'), color='white')
+                            axes[1, 1].tick_params(colors='white')
+                            axes[1, 1].set_facecolor('#262636')
+                        
+                        plt.tight_layout()
+                        st.pyplot(fig)
+                        
+                    except ImportError:
+                        st.info(T(
+                            "📊 Installez matplotlib pour voir les graphiques : pip install matplotlib",
+                            "📊 Install matplotlib to see charts: pip install matplotlib"
+                        ))
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # ========== EXPORTS (avec données persistantes) ==========
+                st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                st.subheader("💾 " + T("Exports", "Exports"))
+                
+                col1, col2, col3 = st.columns(3)
+                
+                # Export Excel
+                # Export Excel (avec tableau récapitulatif)
+                with col1:
+                    if not df_config.empty:
+                        excel_buf = io.BytesIO()
+                        try:
+                            with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
+                                # Feuille 1: Configuration complète
+                                df_config.to_excel(writer, index=False, sheet_name="Configuration_Complete")
+                                
+                                # Feuille 2: Tableau récapitulatif par programme
+                                if 'rgc_df_summary' in st.session_state and st.session_state.rgc_df_summary is not None:
+                                    st.session_state.rgc_df_summary.to_excel(writer, index=False, sheet_name="Recap_Programmes")
+                                
+                                # Feuille 3: Programmes à risque uniquement
+                                if 'Niveau de Risque' in df_config.columns:
+                                    df_risks = df_config[
+                                        df_config['Niveau de Risque'].str.contains('⚠️|🚨', na=False)
+                                    ]
+                                    if not df_risks.empty:
+                                        df_risks.to_excel(writer, index=False, sheet_name="Programmes_Risque")
+                                
+                                # Feuille 4: Statistiques
+                                if st.session_state.rgc_stats_dict:
+                                    df_stats = pd.DataFrame(
+                                        list(st.session_state.rgc_stats_dict.items()),
+                                        columns=['Indicateur', 'Valeur']
+                                    )
+                                    df_stats.to_excel(writer, index=False, sheet_name="Statistiques")
+                                
+                                # Formatting
+                                workbook = writer.book
+                                header_format = workbook.add_format({
+                                    'bold': True,
+                                    'bg_color': '#4EA3FF',
+                                    'font_color': 'white',
+                                    'border': 1
+                                })
+                                
+                                # Apply formatting to all sheets
+                                for sheet_name in writer.sheets:
+                                    worksheet = writer.sheets[sheet_name]
+                                    worksheet.set_row(0, 20, header_format)
+                                    worksheet.set_column(0, 20, 18)
+                            
+                            excel_buf.seek(0)
+                            
+                            st.download_button(
+                                "📥 Excel Complet (4 feuilles)",
+                                data=excel_buf,
+                                file_name=f"RGC_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                key="rgc_download_excel"
+                            )
+                        except ImportError:
+                            st.info("💡 pip install xlsxwriter")
+                
+                # Export CSV
+                with col2:
+                    if not df_config.empty:
+                        csv_buf = io.StringIO()
+                        df_config.to_csv(csv_buf, index=False, sep='|', encoding='utf-8')
+                        csv_buf.seek(0)
+                        
+                        st.download_button(
+                            "📄 CSV (Pipe)",
+                            data=csv_buf.getvalue().encode('utf-8'),
+                            file_name=f"RGC_Config_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            use_container_width=True,
+                            key="rgc_download_csv"
+                        )
+                
+                # Export Rapport complet
+                with col3:
+                    full_report = f"""
+{'='*80}
+RAPPORT D'ANALYSE RGC - GESTION DE CONFIGURATION
+{'='*80}
+Date        : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Fichier     : {st.session_state.rgc_uploaded_filename}
+Analyste    : Système RGC IA
+
+{'='*80}
+TABLEAU DE CONFIGURATION
+{'='*80}
+{df_config.to_string() if not df_config.empty else 'Aucune donnée'}
+
+{'='*80}
+RÉSUMÉ DES RISQUES
+{'='*80}
+{chr(10).join(risk_summary) if risk_summary else 'Aucun risque détecté'}
+
+{'='*80}
+STATISTIQUES
+{'='*80}
+{chr(10).join([f"{k}: {v}" for k, v in stats_dict.items()]) if stats_dict else 'N/A'}
+
+{'='*80}
+FIN DU RAPPORT
+{'='*80}
+"""
+                    st.download_button(
+                        "📋 Rapport TXT",
+                        data=full_report.encode("utf-8"),
+                        file_name=f"RGC_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+                        use_container_width=True,
+                        key="rgc_download_txt"
+                    )
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+# ===================== FOOTER PRO =====================
+st.markdown("""
+<div class="footer-pro">
+    <div class="footer-title">💼 Modernisation Mainframe IBM A&T</div>
+    <div class="footer-team">
+        👥 <span>Équipe</span> : Youness • Hanane • Nezha • Aimane • Khaoula • Naoufal • Imane • Mariem
+    </div>
+    <div style="margin-top: 1rem; color: #666; font-size: 0.85rem;">
+         © 2025 Tous droits réservés
+    </div>
+</div>
+""", unsafe_allow_html=True)
