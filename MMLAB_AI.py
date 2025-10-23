@@ -833,7 +833,7 @@ Mettez en gras les faits critiques et les conclusions déductives.
 
 Question : {question}
 
-CONTENU CV :
+**Documents :**
 {document_content}
 """
 
@@ -1776,7 +1776,7 @@ elif mode == TXT["modes"][0]:
 
     st.markdown("""
     <div class="info-box">
-        🎯 <strong>Mode Expert Mainframe Senior</strong><br>
+        🎯 <strong>Mode Expert Mainframe </strong><br>
         Convertissez du pseudo-code en programmes mainframe professionnels :<br>
         • ✅ COBOL structuré et documenté<br>
         • ✅ PL/I optimisé<br>
