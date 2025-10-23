@@ -1897,7 +1897,7 @@ st.markdown("""
 <div class="footer-pro">
     <div class="footer-title">💼 Modernisation Mainframe IBM A&T</div>
     <div class="footer-team">
-        👥 <span>Équipe</span> : Youness • Hanane • Nezha • Aimane • Khaoula • Naoufal • Imane • Mariem
+        👥 <span>Équipe</span> : Youness • Hanane • Nezha • Aimane • Khaoula • Naoufal • Imane • Meriem
     </div>
     <div style="margin-top: 1rem; color: #666; font-size: 0.85rem;">
          © 2025 Tous droits réservés
