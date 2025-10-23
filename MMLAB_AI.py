@@ -1807,8 +1807,8 @@ elif mode == TXT["modes"][4]:
             max_chars=8,
             help=T("Max 8 caractères alphanumériques", "Max 8 alphanumeric chars"),
             key="pseudo_program_name"
-        ).upper()
-    
+        )
+        program_name = program_name.upper() if program_name else "PROGCONV"
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Zone de saisie du pseudo-code
