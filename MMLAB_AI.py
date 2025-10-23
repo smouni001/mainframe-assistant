@@ -1064,13 +1064,15 @@ elif mode == TXT["modes"][2]:
             default_test_name = "M" + default_test_name
         default_test_name = "".join(ch for ch in default_test_name if ch.isalnum())[:8]
 
-        test_prog_name = st.text_input(
+        test_prog_name_input = st.text_input(
             "🏷️ " + T("Nom du programme de test", "Test program name"),
             value=default_test_name,
             help=T("Commence par 'M', max 8 caractères", "Starts with 'M', max 8 chars"),
             key="cobol_test_name_input"
-        ).upper()
-        
+        )
+
+        # Sécuriser la conversion en majuscules
+        test_prog_name = test_prog_name_input.upper() if test_prog_name_input else default_test_name
         st.session_state.cobol_test_name = test_prog_name
         
         st.markdown('</div>', unsafe_allow_html=True)
