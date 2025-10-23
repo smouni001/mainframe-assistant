@@ -2312,7 +2312,6 @@ elif mode == TXT["modes"][5]:
             st.subheader("📥 Entrées / Sorties")
             st.markdown(sections['entrees_sorties'] if sections['entrees_sorties'] else "_Non détecté_")
             st.markdown('</div>', unsafe_allow_html=True)
-        
         with tab2:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             st.subheader("📖 Dictionnaire des Données")
@@ -2324,23 +2323,46 @@ elif mode == TXT["modes"][5]:
                 headers = []
                 
                 for line in dict_lines:
-                    if '|' in line:
+                    if '|' in line and not line.strip().startswith('-'):
                         parts = [p.strip() for p in line.split('|')]
-                        if not headers and len(parts) >= 4:
-                            headers = parts
-                        elif headers and len(parts) == len(headers):
-                            dict_data.append(parts)
+                        
+                        # Filtrer les éléments vides au début/fin
+                        parts = [p for p in parts if p]
+                        
+                        if len(parts) >= 4:
+                            if not headers:
+                                # Première ligne avec des headers valides
+                                headers = parts
+                                # Vérifier qu'il n'y a pas de doublons
+                                if len(headers) != len(set(headers)):
+                                    # Renommer les doublons
+                                    seen = {}
+                                    new_headers = []
+                                    for h in headers:
+                                        if h in seen:
+                                            seen[h] += 1
+                                            new_headers.append(f"{h}_{seen[h]}")
+                                        else:
+                                            seen[h] = 0
+                                            new_headers.append(h)
+                                    headers = new_headers
+                            elif len(parts) == len(headers):
+                                dict_data.append(parts)
                 
                 if headers and dict_data:
-                    df_dict = pd.DataFrame(dict_data, columns=headers)
-                    st.dataframe(df_dict, use_container_width=True)
+                    try:
+                        df_dict = pd.DataFrame(dict_data, columns=headers)
+                        st.dataframe(df_dict, use_container_width=True)
+                    except Exception as e:
+                        st.warning(f"⚠️ Impossible de créer le tableau : {e}")
+                        st.markdown(sections['dictionnaire'])
                 else:
                     st.markdown(sections['dictionnaire'])
             else:
                 st.info("Aucun dictionnaire détecté")
             
             st.markdown('</div>', unsafe_allow_html=True)
-        
+            
         with tab3:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
             st.subheader("⚖️ Règles de Gestion Extraites")
