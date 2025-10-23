@@ -648,7 +648,7 @@ TEXTS = {
     "Français": {
         "choose_mode": "⚙️ Mode de traitement",
         "modes": [
-            "🔄 Pseudo-Code → Mainframe",
+            "🔄 Pseudo-Code → Language Mainframe",
             "🔧 Génération JCL", 
             "🧪 Test COBOL",
             "📄 Analyse documentaire", 
@@ -658,7 +658,7 @@ TEXTS = {
     "English": {
         "choose_mode": "⚙️ Processing Mode",
         "modes": [
-            "🔄 Pseudo-Code → Mainframe",
+            "🔄 Pseudo-Code → Mainframe Language",
             "🔧 JCL Generation", 
             "🧪 COBOL Testing",
             "📄 Document Analysis", 
@@ -1769,8 +1769,8 @@ FIN DU RAPPORT
 elif mode == TXT["modes"][0]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("🔄 " + T(
-        "Conversion Pseudo-Code → Mainframe", 
-        "Pseudo-Code → Mainframe Conversion"
+        "Conversion Pseudo-Code → Langague Mainframe", 
+        "Pseudo-Code → Mainframe Conversion language"
     ))
     st.markdown('</div>', unsafe_allow_html=True)
 
