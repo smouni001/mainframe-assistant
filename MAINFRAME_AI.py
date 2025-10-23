@@ -394,7 +394,6 @@ def load_prompt_engine(path: str = "PromptEngine.yaml") -> dict:
         </div>
         """, unsafe_allow_html=True)
         return {}
-
 def get_prompt(section: str, lang_key: Optional[str] = None, **kwargs) -> str:
     pe = load_prompt_engine()
     defaults = pe.get("defaults", {})
@@ -403,6 +402,9 @@ def get_prompt(section: str, lang_key: Optional[str] = None, **kwargs) -> str:
 
     if section == "ANALYSE_DOC":
         node = pe.get("ANALYSE_DOC", {}).get("GENERIQUE", "")
+    elif section == "PSEUDOCODE_CONVERSION":
+        # NOUVELLE SECTION POUR CONVERSION PSEUDO-CODE
+        node = pe.get("PSEUDOCODE_CONVERSION", {}).get(lang_key.upper() if lang_key else "COBOL", "")
     elif lang_key:
         node = pe.get(section, {}).get(lang_key.upper(), "")
     else:
@@ -411,20 +413,35 @@ def get_prompt(section: str, lang_key: Optional[str] = None, **kwargs) -> str:
     if not node:
         if section == "ANALYSE_DOC":
             node = "Rôle: Analyste documentaire.\n{document_content}"
+        elif section == "PSEUDOCODE_CONVERSION":
+            node = """Tu es un Expert Mainframe Senior.
+Convertis ce pseudo-code en {lang_key} :
+{pseudocode}
+Programme: {program_name}"""
         elif section == "JCL_GENERATION":
-            node = "Rôle: Expert JCL {lang}.\nCode:\n{source_code}"
+            node = "Rôle: Expert JCL.\nCode:\n{source_code}"
         else:
-            node = "Rôle: QA Test {lang}.\nModule:{module_base}\nCode:\n{source_code}"
+            node = "Rôle: QA Test.\nModule:{module_base}\nCode:\n{source_code}"
+
+    # AJOUT DES PARAMÈTRES PAR DÉFAUT
+    default_params = {
+        'invalid_message': invalid_message,
+        'no_jcl_in_test_mode': no_jcl,
+        'lang_key': lang_key if lang_key else 'COBOL',
+        'lang': lang_key if lang_key else 'COBOL'  # ← AJOUT DU PARAMÈTRE 'lang'
+    }
+    
+    # Fusionner avec les kwargs fournis
+    all_params = {**default_params, **kwargs}
 
     try:
-        return node.format(
-            invalid_message=invalid_message,
-            no_jcl_in_test_mode=no_jcl,
-            **kwargs
-        )
+        return node.format(**all_params)
     except KeyError as e:
-        st.error(f"❌ Paramètre manquant: {e}")
+        st.error(f"❌ Paramètre manquant dans le prompt : {e}")
+        st.info(f"Paramètres disponibles : {list(all_params.keys())}")
+        st.code(node, language="yaml")
         return node
+
 
 # ===================== HELPERS =====================
 def llm_client(max_tokens: int = 4000, temperature: float = 0.2):
@@ -2010,13 +2027,21 @@ elif mode == TXT["modes"][4]:  # Index 4 = 5ème élément
         """, unsafe_allow_html=True)
 
     # Bouton de génération
+    # Bouton de génération
     if st.button(
         "🚀 " + T("CONVERTIR EN " + target_lang, f"CONVERT TO {target_lang}"),
         disabled=not pseudocode.strip() or not valid_name,
         use_container_width=True
     ):
-        # Déterminer la clé du prompt
-        lang_key = target_lang.split()[0]  # "COBOL", "PL/I", "HLASM"
+        # Déterminer la clé du prompt (CORRECTION ICI)
+        if "COBOL" in target_lang:
+            lang_key = "COBOL"
+        elif "PL/I" in target_lang or "PL1" in target_lang:
+            lang_key = "PLI"
+        elif "Assembler" in target_lang or "HLASM" in target_lang:
+            lang_key = "HLASM"
+        else:
+            lang_key = "COBOL"  # Par défaut
         
         # Charger le prompt depuis PromptEngine.yaml
         prompt_text = get_prompt(
@@ -2025,6 +2050,17 @@ elif mode == TXT["modes"][4]:  # Index 4 = 5ème élément
             pseudocode=pseudocode,
             program_name=program_name
         )
+        
+        # Vérifier si le prompt est vide ou contient des erreurs
+        if not prompt_text or "{" in prompt_text:
+            st.markdown(f"""
+            <div class="error-box">
+                ❌ Erreur de configuration du prompt pour {target_lang}<br>
+                Vérifiez que <code>PromptEngine.yaml</code> contient la section 
+                <code>PSEUDOCODE_CONVERSION.{lang_key}</code>
+            </div>
+            """, unsafe_allow_html=True)
+            st.stop()
         
         client = llm_client(max_tokens=4000, temperature=0.1)
         
@@ -2041,15 +2077,34 @@ elif mode == TXT["modes"][4]:  # Index 4 = 5ème élément
                     result = response.content if hasattr(response, 'content') else str(response)
                     
                     if result:
-                        # Nettoyage du résultat (enlever les ```cobol``` si présents)
+                        # Nettoyage du résultat (enlever les ```cobol/pli/asm``` si présents)
                         code_clean = result.strip()
+                        
+                        # Supprimer les balises markdown
                         if code_clean.startswith("```"):
-                            code_clean = "\n".join(code_clean.split("\n")[1:-1])
+                            lines = code_clean.split("\n")
+                            # Enlever première ligne (```langage) et dernière ligne (```)
+                            if lines[-1].strip() == "```":
+                                lines = lines[1:-1]
+                            else:
+                                lines = lines[1:]
+                            code_clean = "\n".join(lines)
                         
                         # Affichage du code généré
                         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
                         st.subheader(f"📘 Code {target_lang} Généré")
-                        st.code(code_clean, language="cobol" if "COBOL" in target_lang else "text")
+                        
+                        # Choisir le langage de coloration syntaxique
+                        if "COBOL" in target_lang:
+                            syntax_lang = "cobol"
+                        elif "PL/I" in target_lang:
+                            syntax_lang = "sql"  # Streamlit n'a pas de support PL/I natif
+                        elif "Assembler" in target_lang:
+                            syntax_lang = "asm"
+                        else:
+                            syntax_lang = "text"
+                        
+                        st.code(code_clean, language=syntax_lang)
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                         # Exports
@@ -2112,14 +2167,24 @@ FIN DU DOCUMENT
                         with col2:
                             st.metric("Caractères", len(code_clean))
                         with col3:
-                            comment_lines = sum(1 for line in code_clean.split('\n') 
-                                               if line.strip().startswith('*') or '*>' in line)
+                            # Compter les commentaires selon le langage
+                            if "COBOL" in target_lang:
+                                comment_lines = sum(1 for line in code_clean.split('\n') 
+                                                   if line.strip().startswith('*') or '*>' in line)
+                            elif "PL/I" in target_lang:
+                                comment_lines = code_clean.count('/*')
+                            else:  # Assembler
+                                comment_lines = sum(1 for line in code_clean.split('\n') 
+                                                   if line.strip().startswith('*'))
+                            
                             st.metric("Lignes commentées", comment_lines)
                         
                         st.markdown('</div>', unsafe_allow_html=True)
                         
                 except Exception as e:
                     st.error(f"❌ Erreur lors de la génération : {e}")
+                    import traceback
+                    st.code(traceback.format_exc(), language="python")
 # ===================== FOOTER PRO =====================
 st.markdown("""
 <div class="footer-pro">
