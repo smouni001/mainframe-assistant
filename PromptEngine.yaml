@@ -24,6 +24,7 @@ PSEUDOCODE_CONVERSION:
     5. Gestion des erreurs (INVALID KEY, AT END, etc.)
     6. STOP RUN ou GOBACK en fin de programme
     7. Si ambiguïté : DEMANDER des clarifications avant de générer
+    8. la zone AUTEUR  doit contenir "Mainframe Modernization LAB BY IBM A&T"
     
     **Pseudo-code à convertir** :
     {pseudocode}
