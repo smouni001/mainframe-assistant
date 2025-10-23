@@ -678,7 +678,7 @@ mode = st.sidebar.radio(
 )
 
 # ===================== MODE 1 : ANALYSE DOC =====================
-if mode == TXT["modes"][0]:
+if mode == TXT["modes"][3]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header(T("📄 Analyse Documentaire Intelligente", "📄 Intelligent Document Analysis"))
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1239,7 +1239,7 @@ elif mode == TXT["modes"][2]:
             )
 
 # ===================== MODE 4 : RGC ANALYSIS =====================
-elif mode == TXT["modes"][3]:
+elif mode == TXT["modes"][4]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("⚙️ " + T("Analyse RGC - Gestion de Configuration Logicielle", "RGC Analysis - Software Configuration Management"))
     st.markdown('</div>', unsafe_allow_html=True)
@@ -1766,7 +1766,7 @@ FIN DU RAPPORT
             st.markdown('</div>', unsafe_allow_html=True)
 
 # ===================== MODE 5 : PSEUDO-CODE CONVERSION =====================
-elif mode == TXT["modes"][4]:
+elif mode == TXT["modes"][0]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("🔄 " + T(
         "Conversion Pseudo-Code → Mainframe", 
