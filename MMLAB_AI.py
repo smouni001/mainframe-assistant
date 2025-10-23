@@ -92,6 +92,16 @@ if 'pseudo_generated_program_name' not in st.session_state:  # ← RENOMMÉ
 if 'pseudo_source_code' not in st.session_state:  # ← RENOMMÉ
     st.session_state.pseudo_source_code = None    
 
+# Mode 6 : Extraction Règles de Gestion
+if 'business_rules_result' not in st.session_state:
+    st.session_state.business_rules_result = None
+if 'business_rules_source_code' not in st.session_state:
+    st.session_state.business_rules_source_code = None
+if 'business_rules_language' not in st.session_state:
+    st.session_state.business_rules_language = None
+if 'business_rules_filename' not in st.session_state:
+    st.session_state.business_rules_filename = None
+
 # ===================== CUSTOM CSS PRO =====================
 st.markdown("""
 <style>
@@ -652,7 +662,8 @@ TEXTS = {
             "🔧 Génération JCL", 
             "🧪 Test COBOL",
             "📄 Analyse documentaire", 
-            "⚙️ Analyse RGC"
+            "⚙️ Analyse RGC",
+            "📊 Extraction Règles de Gestion"  # ← NOUVEAU MODE
         ],
     },
     "English": {
@@ -662,7 +673,8 @@ TEXTS = {
             "🔧 JCL Generation", 
             "🧪 COBOL Testing",
             "📄 Document Analysis", 
-            "⚙️ RGC Analysis"
+            "⚙️ RGC Analysis",
+            "📊 Business Rules Extraction"  # ← NOUVEAU MODE
         ],
     }
 }
@@ -2069,7 +2081,438 @@ FIN DU DOCUMENT
             st.metric("Lignes commentées", comment_lines)
         
         st.markdown('</div>', unsafe_allow_html=True)
+# ===================== MODE 6 : EXTRACTION RÈGLES DE GESTION =====================
+elif mode == TXT["modes"][5]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("📊 " + T(
+        "Extraction de Règles de Gestion - Code Legacy", 
+        "Business Rules Extraction - Legacy Code"
+    ))
+    st.markdown('</div>', unsafe_allow_html=True)
 
+    st.markdown("""
+    <div class="info-box">
+        🎯 <strong>Mode Expert Analyse Legacy</strong><br>
+        Extrayez automatiquement les règles de gestion depuis du code mainframe :<br>
+        • ✅ Analyse complète COBOL/PL/I/Assembler<br>
+        • ✅ Dictionnaire de données automatique<br>
+        • ✅ Règles numérotées et documentées<br>
+        • ✅ Scénarios de tests recommandés<br>
+        • ✅ Document lisible par non-techniciens<br>
+        <br>
+        <strong>Format de sortie :</strong> Document structuré en français (Word + TXT)
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Upload du fichier source
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("📂 " + T("Fichier Source Legacy", "Legacy Source File"))
+    
+    uploaded_legacy = st.file_uploader(
+        "📄 " + T("Programme COBOL/PL/I/ASM", "COBOL/PL/I/ASM Program"),
+        type=["cbl", "cob", "pli", "pl1", "asm", "txt"],
+        help=T("Sélectionnez votre fichier source mainframe", "Select your mainframe source file"),
+        key="business_rules_file_uploader"
+    )
+    
+    if uploaded_legacy:
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ Fichier chargé : <strong>{uploaded_legacy.name}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.session_state.business_rules_filename = uploaded_legacy.name
+        
+        # Détection du langage
+        file_name = uploaded_legacy.name
+        ext = file_name.split(".")[-1].lower()
+        
+        lang_map = {
+            "cbl": "COBOL", 
+            "cob": "COBOL", 
+            "pli": "PL/I", 
+            "pl1": "PL/I", 
+            "asm": "ASM",
+            "txt": "COBOL"  # Par défaut
+        }
+        detected_lang = lang_map.get(ext, "COBOL")
+        
+        st.markdown(f"""
+        <div class="info-box">
+            🔍 Langage détecté : <strong>{detected_lang}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.session_state.business_rules_language = detected_lang
+        
+        # Lecture du code
+        try:
+            uploaded_legacy.seek(0)
+            source_code = uploaded_legacy.read().decode("utf-8", errors="ignore")
+            st.session_state.business_rules_source_code = source_code
+            
+            # Aperçu du code
+            st.markdown("**📋 Aperçu du code source :**")
+            preview_lines = source_code.split('\n')[:20]
+            st.code('\n'.join(preview_lines), language="cobol" if "COBOL" in detected_lang else "text")
+            
+            if len(source_code.split('\n')) > 20:
+                st.caption(f"... ({len(source_code.split('\n')) - 20} lignes supplémentaires)")
+        
+        except Exception as e:
+            st.error(f"❌ Erreur de lecture : {e}")
+            st.stop()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Options d'extraction
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("⚙️ " + T("Options d'extraction", "Extraction Options"))
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        extract_dict = st.checkbox(
+            "📖 Dictionnaire de données",
+            value=True,
+            help=T("Générer le dictionnaire complet des variables", "Generate complete data dictionary"),
+            key="br_extract_dict"
+        )
+    with col2:
+        extract_tests = st.checkbox(
+            "🧪 Scénarios de tests",
+            value=True,
+            help=T("Proposer des scénarios de test", "Suggest test scenarios"),
+            key="br_extract_tests"
+        )
+    with col3:
+        extract_diagrams = st.checkbox(
+            "📊 Suggestion diagrammes",
+            value=False,
+            help=T("Suggérer des diagrammes de flux", "Suggest flow diagrams"),
+            key="br_extract_diagrams"
+        )
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Bouton d'extraction
+    extract_button = st.button(
+        "🚀 " + T("EXTRAIRE LES RÈGLES DE GESTION", "EXTRACT BUSINESS RULES"),
+        disabled=not uploaded_legacy,
+        use_container_width=True,
+        key="business_rules_extract_btn"
+    )
+
+    if extract_button:
+        source_code = st.session_state.business_rules_source_code
+        detected_lang = st.session_state.business_rules_language
+        
+        if not source_code or not source_code.strip():
+            st.markdown('<div class="error-box">❌ Code source vide</div>', unsafe_allow_html=True)
+            st.stop()
+        
+        # Déterminer la clé du prompt
+        lang_key = "COBOL"
+        if "PL/I" in detected_lang or "PL1" in detected_lang:
+            lang_key = "PLI"
+        elif "ASM" in detected_lang or "Assembler" in detected_lang:
+            lang_key = "ASM"
+        
+        # Charger le prompt
+        prompt_text = get_prompt(
+            "BUSINESS_RULES_EXTRACTION",
+            lang_key,
+            source_code=source_code[:100_000]  # Limiter à 100k caractères
+        )
+        
+        if not prompt_text or "{" in prompt_text:
+            st.markdown(f"""
+            <div class="error-box">
+                ❌ Erreur de configuration du prompt pour {detected_lang}<br>
+                Vérifiez que <code>PromptEngine.yaml</code> contient la section 
+                <code>BUSINESS_RULES_EXTRACTION.{lang_key}</code>
+            </div>
+            """, unsafe_allow_html=True)
+            st.stop()
+        
+        client = llm_client(max_tokens=4000, temperature=0.1)
+        
+        if not client:
+            st.markdown('<div class="error-box">❌ Client LLM indisponible</div>', unsafe_allow_html=True)
+            st.stop()
+        
+        with st.spinner(T(
+            "🧠 Extraction des règles de gestion en cours...",
+            "🧠 Extracting business rules..."
+        )):
+            try:
+                response = client.invoke(prompt_text)
+                result = response.content if hasattr(response, 'content') else str(response)
+                st.session_state.business_rules_result = result
+            except Exception as e:
+                st.error(f"❌ Erreur LLM : {e}")
+                import traceback
+                st.code(traceback.format_exc(), language="python")
+                st.session_state.business_rules_result = None
+
+    # Affichage des résultats (persistant)
+    if st.session_state.business_rules_result:
+        result = st.session_state.business_rules_result
+        detected_lang = st.session_state.business_rules_language
+        filename = st.session_state.business_rules_filename
+        
+        # Parsing des sections
+        sections = {
+            'resume': '',
+            'entrees_sorties': '',
+            'dictionnaire': '',
+            'regles': '',
+            'scenarios': '',
+            'ambiguites': ''
+        }
+        
+        if "=== RESUME_FONCTIONNEL ===" in result:
+            parts = result.split("=== RESUME_FONCTIONNEL ===", 1)[1]
+            
+            if "=== ENTREES_SORTIES ===" in parts:
+                sections['resume'], rest = parts.split("=== ENTREES_SORTIES ===", 1)
+                
+                if "=== DICTIONNAIRE_DONNEES ===" in rest:
+                    sections['entrees_sorties'], rest = rest.split("=== DICTIONNAIRE_DONNEES ===", 1)
+                    
+                    if "=== REGLES_GESTION ===" in rest:
+                        sections['dictionnaire'], rest = rest.split("=== REGLES_GESTION ===", 1)
+                        
+                        if "=== SCENARIOS_TESTS ===" in rest:
+                            sections['regles'], rest = rest.split("=== SCENARIOS_TESTS ===", 1)
+                            
+                            if "=== POINTS_AMBIGUITE ===" in rest:
+                                sections['scenarios'], sections['ambiguites'] = rest.split("=== POINTS_AMBIGUITE ===", 1)
+                            else:
+                                sections['scenarios'] = rest
+                        else:
+                            sections['regles'] = rest
+
+        # Affichage organisé par onglets
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📋 Résumé Fonctionnel",
+            "📖 Dictionnaire Données",
+            "⚖️ Règles de Gestion",
+            "🧪 Scénarios Tests",
+            "⚠️ Points d'Ambiguïté"
+        ])
+        
+        with tab1:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📋 Résumé Fonctionnel")
+            st.markdown(sections['resume'] if sections['resume'] else result[:1000])
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📥 Entrées / Sorties")
+            st.markdown(sections['entrees_sorties'] if sections['entrees_sorties'] else "_Non détecté_")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with tab2:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📖 Dictionnaire des Données")
+            
+            if sections['dictionnaire']:
+                # Essayer de parser en DataFrame
+                dict_lines = sections['dictionnaire'].strip().split('\n')
+                dict_data = []
+                headers = []
+                
+                for line in dict_lines:
+                    if '|' in line:
+                        parts = [p.strip() for p in line.split('|')]
+                        if not headers and len(parts) >= 4:
+                            headers = parts
+                        elif headers and len(parts) == len(headers):
+                            dict_data.append(parts)
+                
+                if headers and dict_data:
+                    df_dict = pd.DataFrame(dict_data, columns=headers)
+                    st.dataframe(df_dict, use_container_width=True)
+                else:
+                    st.markdown(sections['dictionnaire'])
+            else:
+                st.info("Aucun dictionnaire détecté")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with tab3:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("⚖️ Règles de Gestion Extraites")
+            
+            if sections['regles']:
+                # Compter les règles
+                nb_regles = sections['regles'].count('**Règle RG-')
+                st.metric("📊 Nombre de règles détectées", nb_regles)
+                st.markdown("---")
+                st.markdown(sections['regles'])
+            else:
+                st.warning("Aucune règle extraite")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with tab4:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("🧪 Scénarios de Tests Recommandés")
+            st.markdown(sections['scenarios'] if sections['scenarios'] else "_Aucun scénario proposé_")
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        with tab5:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("⚠️ Points d'Ambiguïté ou Informations Manquantes")
+            
+            if sections['ambiguites'].strip():
+                st.warning(sections['ambiguites'])
+            else:
+                st.success("✅ Aucune ambiguïté détectée")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Exports
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("💾 " + T("Exports Documentation", "Documentation Exports"))
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Export Word (si disponible)
+            try:
+                from docx import Document
+                from docx.shared import Pt, RGBColor
+                from docx.enum.text import WD_ALIGN_PARAGRAPH
+                
+                doc = Document()
+                
+                # Titre
+                title = doc.add_heading(f"Documentation Règles de Gestion - {filename}", 0)
+                title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
+                # Métadonnées
+                doc.add_paragraph(f"Langage : {detected_lang}")
+                doc.add_paragraph(f"Date d'extraction : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                doc.add_paragraph(f"Généré par : Assistant IA Mainframe Expert")
+                doc.add_paragraph("="*80)
+                
+                # Sections
+                if sections['resume']:
+                    doc.add_heading("1. Résumé Fonctionnel", 1)
+                    doc.add_paragraph(sections['resume'])
+                
+                if sections['entrees_sorties']:
+                    doc.add_heading("2. Entrées / Sorties", 1)
+                    doc.add_paragraph(sections['entrees_sorties'])
+                
+                if sections['dictionnaire']:
+                    doc.add_heading("3. Dictionnaire des Données", 1)
+                    doc.add_paragraph(sections['dictionnaire'])
+                
+                if sections['regles']:
+                    doc.add_heading("4. Règles de Gestion", 1)
+                    doc.add_paragraph(sections['regles'])
+                
+                if sections['scenarios']:
+                    doc.add_heading("5. Scénarios de Tests", 1)
+                    doc.add_paragraph(sections['scenarios'])
+                
+                if sections['ambiguites']:
+                    doc.add_heading("6. Points d'Ambiguïté", 1)
+                    doc.add_paragraph(sections['ambiguites'])
+                
+                # Sauvegarde
+                doc_buf = io.BytesIO()
+                doc.save(doc_buf)
+                doc_buf.seek(0)
+                
+                st.download_button(
+                    "📥 Télécharger Documentation (Word)",
+                    data=doc_buf,
+                    file_name=f"Regles_Gestion_{filename.split('.')[0]}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key="br_download_word"
+                )
+            except ImportError:
+                st.info("💡 Installez python-docx pour l'export Word")
+        
+        with col2:
+            # Export TXT complet
+            txt_export = f"""
+{'='*80}
+DOCUMENTATION RÈGLES DE GESTION
+{'='*80}
+Fichier      : {filename}
+Langage      : {detected_lang}
+Date         : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Généré par   : Assistant IA Mainframe Expert
+
+{'='*80}
+1. RÉSUMÉ FONCTIONNEL
+{'='*80}
+{sections['resume']}
+
+{'='*80}
+2. ENTRÉES / SORTIES
+{'='*80}
+{sections['entrees_sorties']}
+
+{'='*80}
+3. DICTIONNAIRE DES DONNÉES
+{'='*80}
+{sections['dictionnaire']}
+
+{'='*80}
+4. RÈGLES DE GESTION
+{'='*80}
+{sections['regles']}
+
+{'='*80}
+5. SCÉNARIOS DE TESTS
+{'='*80}
+{sections['scenarios']}
+
+{'='*80}
+6. POINTS D'AMBIGUÏTÉ
+{'='*80}
+{sections['ambiguites']}
+
+{'='*80}
+FIN DU DOCUMENT
+{'='*80}
+"""
+            st.download_button(
+                "📄 Télécharger Documentation (TXT)",
+                data=txt_export.encode("utf-8"),
+                file_name=f"Regles_Gestion_{filename.split('.')[0]}.txt",
+                use_container_width=True,
+                key="br_download_txt"
+            )
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # Métriques finales
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("📊 " + T("Statistiques d'extraction", "Extraction Statistics"))
+        
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            nb_regles = sections['regles'].count('**Règle RG-')
+            st.metric("Règles extraites", nb_regles)
+        with col2:
+            nb_variables = sections['dictionnaire'].count('|') // 4 if sections['dictionnaire'] else 0
+            st.metric("Variables documentées", nb_variables)
+        with col3:
+            nb_scenarios = sections['scenarios'].count('Cas normal')
+            st.metric("Scénarios tests", nb_scenarios)
+        with col4:
+            nb_ambiguites = sections['ambiguites'].count('-')
+            st.metric("Points d'ambiguïté", nb_ambiguites)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 # ===================== FOOTER PRO =====================
 st.markdown("""
 <div class="footer-pro">

@@ -4,6 +4,76 @@ defaults:
   invalid_message: "❌ Le code fourni ne correspond à aucun langage valide (COBOL, PL/I ou Assembler). Veuillez vérifier votre fichier."
   reject_multi_file: "❌ Un seul module à la fois. Chargez un seul fichier .CBL/.PLI/.ASM."
   no_jcl_in_test_mode: "⚠️ Mode Test métier : ne générez PAS de JCL."
+BUSINESS_RULES_EXTRACTION:
+  COBOL: |
+    Tu es un expert en analyse de code Legacy (COBOL, PL/I et Assembleur) et en extraction de règles de gestion.
+    Ta mission est d'analyser attentivement le code COBOL fourni afin d'en déduire toutes les règles de gestion de manière claire, complète, lisible par un humain et sans oublier aucun détail.
+
+    **Objectif** : Produire un document en français compréhensible par un analyste fonctionnel, un chef de projet ou un développeur, permettant d'expliquer précisément ce que fait le programme et toutes ses règles de gestion.
+
+    🔍 **Consignes d'analyse**
+    - Lire et analyser le code ligne par ligne
+    - Identifier : données d'entrée/sortie, variables, conditions, calculs, contrôles, validations, traitements d'erreur
+    - Déduire toutes les règles de gestion, même implicites
+    - Ne rien inventer : si un contexte manque, le signaler
+
+    🧾 **Format de sortie attendu (en français et lisible)**
+
+    === RESUME_FONCTIONNEL ===
+    [Résumé en 3 à 8 lignes : objectif du programme + fonctionnement général]
+
+    === ENTREES_SORTIES ===
+    **Entrées :**
+    - [Liste des fichiers, tables, paramètres d'entrée]
+
+    **Sorties :**
+    - [Liste des fichiers, tables, variables de sortie]
+
+    === DICTIONNAIRE_DONNEES ===
+    | Nom | Type | Taille/Format | Rôle |
+    |-----|------|---------------|------|
+    | [Variable] | [Type] | [Format] | [Description] |
+
+    === REGLES_GESTION ===
+    **Règle RG-001 : [Intitulé clair]**
+    - **Description** : [Explication en français, langage métier]
+    - **Références code** : [Lignes ou paragraphes concernés]
+    - **Variables** : [Liste des variables impliquées]
+    - **Condition** : [Quand cette règle s'applique]
+    - **Actions** : [Ce qui est fait]
+    - **Exceptions** : [Cas particuliers]
+
+    [Répéter pour chaque règle]
+
+    === SCENARIOS_TESTS ===
+    **Pour RG-001 :**
+    - Cas normal : [Description]
+    - Cas limite : [Description]
+    - Cas erreur : [Description]
+
+    === POINTS_AMBIGUITE ===
+    - [Liste des éléments nécessitant clarification]
+
+    **Code COBOL à analyser :**
+    {source_code}
+
+  PLI: |
+    [Même structure adaptée pour PL/I]
+    Tu es un expert en analyse de code PL/I et en extraction de règles de gestion.
+    
+    [Reprendre la même structure que COBOL en adaptant pour PL/I]
+    
+    **Code PL/I à analyser :**
+    {source_code}
+
+  ASM: |
+    [Même structure adaptée pour Assembler]
+    Tu es un expert en analyse de code Assembler (HLASM) et en extraction de règles de gestion.
+    
+    [Reprendre la même structure que COBOL en adaptant pour ASM]
+    
+    **Code Assembler à analyser :**
+    {source_code}  
 PSEUDOCODE_CONVERSION:
   COBOL: |
     Tu es un Expert Mainframe Senior avec plus de 20 ans d'expérience dans le développement, 
