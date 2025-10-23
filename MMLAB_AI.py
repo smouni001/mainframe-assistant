@@ -85,12 +85,12 @@ if 'rgc_df_summary' not in st.session_state:
 # Mode 5 : Pseudo-Code Conversion
 if 'pseudo_result' not in st.session_state:
     st.session_state.pseudo_result = None
-if 'pseudo_language' not in st.session_state:
-    st.session_state.pseudo_language = None
-if 'pseudo_program_name' not in st.session_state:
-    st.session_state.pseudo_program_name = None
-if 'pseudo_code_input' not in st.session_state:
-    st.session_state.pseudo_code_input = None
+if 'pseudo_target_language' not in st.session_state:  # ← RENOMMÉ
+    st.session_state.pseudo_target_language = None
+if 'pseudo_generated_program_name' not in st.session_state:  # ← RENOMMÉ
+    st.session_state.pseudo_generated_program_name = None
+if 'pseudo_source_code' not in st.session_state:  # ← RENOMMÉ
+    st.session_state.pseudo_source_code = None    
 
 # ===================== CUSTOM CSS PRO =====================
 st.markdown("""
@@ -1787,6 +1787,7 @@ elif mode == TXT["modes"][4]:
     """, unsafe_allow_html=True)
 
     # Sélection du langage cible
+    # Sélection du langage cible
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.subheader("⚙️ " + T("Configuration", "Settings"))
     
@@ -1797,18 +1798,21 @@ elif mode == TXT["modes"][4]:
             ["COBOL", "PL/I", "HLASM (Assembler)"],
             help=T("Choisissez le langage mainframe de sortie", 
                    "Choose the output mainframe language"),
-            key="pseudo_target_lang"
+            key="pseudo_target_lang_select"  # ← CLÉ UNIQUE POUR LE WIDGET
         )
     
     with col2:
-        program_name = st.text_input(
+        program_name_input = st.text_input(
             "🏷️ " + T("Nom du programme", "Program Name"),
             value="PROGCONV",
             max_chars=8,
             help=T("Max 8 caractères alphanumériques", "Max 8 alphanumeric chars"),
-            key="pseudo_program_name"
+            key="pseudo_program_name_input"  # ← CLÉ UNIQUE POUR LE WIDGET
         )
-        program_name = program_name.upper() if program_name else "PROGCONV"
+        
+        # Sécuriser la conversion en majuscules
+        program_name = program_name_input.upper() if program_name_input else "PROGCONV"
+    
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Zone de saisie du pseudo-code
@@ -1819,12 +1823,15 @@ elif mode == TXT["modes"][4]:
         T("Méthode de saisie", "Input Method"),
         [T("Saisie directe", "Direct Input"), T("Fichier texte", "Text File")],
         horizontal=True,
-        key="pseudo_input_method"
+        key="pseudo_input_method_radio"  # ← CLÉ UNIQUE
     )
     
     pseudocode = ""
     
     if T("Saisie directe", "Direct Input") in input_method:
+        # Utiliser la valeur stockée comme défaut
+        default_value = st.session_state.pseudo_source_code if st.session_state.pseudo_source_code else ""
+        
         pseudocode = st.text_area(
             T("Entrez votre pseudo-code", "Enter your pseudo-code"),
             placeholder=T(
@@ -1850,15 +1857,15 @@ elif mode == TXT["modes"][4]:
                 "4. End program"
             ),
             height=300,
-            key="pseudo_code_textarea",
-            value=st.session_state.pseudo_code_input if st.session_state.pseudo_code_input else ""
+            key="pseudo_code_textarea_input",  # ← CLÉ UNIQUE
+            value=default_value
         )
     else:
         uploaded_pseudo = st.file_uploader(
             "📂 " + T("Fichier pseudo-code (.txt)", "Pseudo-code file (.txt)"),
             type=["txt"],
             help=T("Fichier texte contenant le pseudo-code", "Text file with pseudo-code"),
-            key="pseudo_file_uploader"
+            key="pseudo_file_uploader_widget"  # ← CLÉ UNIQUE
         )
         
         if uploaded_pseudo:
@@ -1890,13 +1897,14 @@ elif mode == TXT["modes"][4]:
         "🚀 " + T("CONVERTIR EN " + target_lang, f"CONVERT TO {target_lang}"),
         disabled=not pseudocode.strip() or not valid_name,
         use_container_width=True,
-        key="pseudo_convert_btn"
+        key="pseudo_convert_button"  # ← CLÉ UNIQUE
     )
     
     if generate_button:
-        st.session_state.pseudo_code_input = pseudocode
-        st.session_state.pseudo_language = target_lang
-        st.session_state.pseudo_program_name = program_name
+        # STOCKER DANS SESSION_STATE avec des clés différentes des widgets
+        st.session_state.pseudo_source_code = pseudocode
+        st.session_state.pseudo_target_language = target_lang
+        st.session_state.pseudo_generated_program_name = program_name
         
         # Déterminer la clé du prompt
         if "COBOL" in target_lang:
@@ -1966,8 +1974,8 @@ elif mode == TXT["modes"][4]:
     # Affichage des résultats (persistant)
     if st.session_state.pseudo_result:
         code_clean = st.session_state.pseudo_result
-        target_lang = st.session_state.pseudo_language
-        program_name = st.session_state.pseudo_program_name
+        target_lang = st.session_state.pseudo_target_language
+        program_name = st.session_state.pseudo_generated_program_name
         
         # Affichage du code généré
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
@@ -2003,7 +2011,7 @@ elif mode == TXT["modes"][4]:
                 data=code_clean.encode("utf-8"),
                 file_name=f"{program_name}{file_ext}",
                 use_container_width=True,
-                key="pseudo_download_code"
+                key="pseudo_download_code_btn"  # ← CLÉ UNIQUE
             )
         
         with col2:
@@ -2019,7 +2027,7 @@ Généré par   : Assistant IA Mainframe Expert
 {'='*80}
 PSEUDO-CODE SOURCE
 {'='*80}
-{st.session_state.pseudo_code_input}
+{st.session_state.pseudo_source_code}
 
 {'='*80}
 CODE {target_lang} GÉNÉRÉ
@@ -2035,7 +2043,7 @@ FIN DU DOCUMENT
                 data=doc_complete.encode("utf-8"),
                 file_name=f"{program_name}_DOCUMENTATION.txt",
                 use_container_width=True,
-                key="pseudo_download_doc"
+                key="pseudo_download_doc_btn"  # ← CLÉ UNIQUE
             )
         
         # Métriques du code généré
