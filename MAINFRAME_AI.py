@@ -605,7 +605,8 @@ TEXTS = {
             "📄 Analyse documentaire", 
             "🔧 Génération JCL", 
             "🧪 Test COBOL",
-            "⚙️ Analyse RGC"  # ← NOUVEAU
+            "⚙️ Analyse RGC",
+            "🔄 Pseudo-Code → Mainframe"  # ← NOUVEAU MODE
         ],
     },
     "English": {
@@ -614,7 +615,8 @@ TEXTS = {
             "📄 Document Analysis", 
             "🔧 JCL Generation", 
             "🧪 COBOL Testing",
-            "⚙️ RGC Analysis"  # ← NOUVEAU
+            "⚙️ RGC Analysis",
+            "🔄 Pseudo-Code → Mainframe"  # ← NOUVEAU MODE
         ],
     }
 }
@@ -1892,6 +1894,232 @@ FIN DU RAPPORT
                     )
                 
                 st.markdown('</div>', unsafe_allow_html=True)
+# ===================== MODE 5 : PSEUDO-CODE → MAINFRAME =====================
+elif mode == TXT["modes"][4]:  # Index 4 = 5ème élément
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("🔄 " + T(
+        "Conversion Pseudo-Code → Mainframe", 
+        "Pseudo-Code → Mainframe Conversion"
+    ))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Info box explicative
+    st.markdown("""
+    <div class="info-box">
+        🎯 <strong>Mode Expert Mainframe Senior</strong><br>
+        Convertissez du pseudo-code en programmes mainframe professionnels :<br>
+        • ✅ COBOL structuré et documenté<br>
+        • ✅ PL/I optimisé<br>
+        • ✅ Assembler (HLASM) avec macros<br>
+        • ✅ Respect des standards IBM z/OS<br>
+        • ✅ Code prêt à compilation
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Sélection du langage cible
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("⚙️ " + T("Configuration", "Settings"))
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        target_lang = st.selectbox(
+            "🎯 " + T("Langage cible", "Target Language"),
+            ["COBOL", "PL/I", "HLASM (Assembler)"],
+            help=T("Choisissez le langage mainframe de sortie", 
+                   "Choose the output mainframe language")
+        )
+    
+    with col2:
+        program_name = st.text_input(
+            "🏷️ " + T("Nom du programme", "Program Name"),
+            value="PROGCONV",
+            max_chars=8,
+            help=T("Max 8 caractères alphanumériques", "Max 8 alphanumeric chars")
+        ).upper()
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Zone de saisie du pseudo-code
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("📝 " + T("Pseudo-Code Source", "Source Pseudo-Code"))
+    
+    input_method = st.radio(
+        T("Méthode de saisie", "Input Method"),
+        [T("Saisie directe", "Direct Input"), T("Fichier texte", "Text File")],
+        horizontal=True
+    )
+    
+    pseudocode = ""
+    
+    if T("Saisie directe", "Direct Input") in input_method:
+        pseudocode = st.text_area(
+            T("Entrez votre pseudo-code", "Enter your pseudo-code"),
+            placeholder=T(
+                "Exemple :\n"
+                "1. Lire fichier client FCLIENT\n"
+                "2. Pour chaque enregistrement :\n"
+                "   - Si solde > 1000 ALORS\n"
+                "     * Calculer bonus = solde * 0.05\n"
+                "     * Écrire dans FBONUS\n"
+                "   - Sinon\n"
+                "     * Incrémenter compteur clients standards\n"
+                "3. Afficher total bonus calculés\n"
+                "4. Fin programme",
+                "Example:\n"
+                "1. Read customer file FCLIENT\n"
+                "2. For each record:\n"
+                "   - If balance > 1000 THEN\n"
+                "     * Calculate bonus = balance * 0.05\n"
+                "     * Write to FBONUS\n"
+                "   - Else\n"
+                "     * Increment standard customer counter\n"
+                "3. Display total bonuses calculated\n"
+                "4. End program"
+            ),
+            height=300
+        )
+    else:
+        uploaded_pseudo = st.file_uploader(
+            "📂 " + T("Fichier pseudo-code (.txt)", "Pseudo-code file (.txt)"),
+            type=["txt"],
+            help=T("Fichier texte contenant le pseudo-code", "Text file with pseudo-code")
+        )
+        
+        if uploaded_pseudo:
+            try:
+                pseudocode = uploaded_pseudo.read().decode("utf-8", errors="ignore")
+                st.code(pseudocode[:500] + ("..." if len(pseudocode) > 500 else ""), 
+                        language="text")
+            except Exception as e:
+                st.error(f"❌ Erreur lecture : {e}")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Validation du nom de programme
+    valid_name = (
+        len(program_name) > 0 and 
+        len(program_name) <= 8 and 
+        program_name.isalnum()
+    )
+    
+    if not valid_name:
+        st.markdown("""
+        <div class="warning-box">
+            ⚠️ Nom de programme invalide (1-8 caractères alphanumériques)
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Bouton de génération
+    if st.button(
+        "🚀 " + T("CONVERTIR EN " + target_lang, f"CONVERT TO {target_lang}"),
+        disabled=not pseudocode.strip() or not valid_name,
+        use_container_width=True
+    ):
+        # Déterminer la clé du prompt
+        lang_key = target_lang.split()[0]  # "COBOL", "PL/I", "HLASM"
+        
+        # Charger le prompt depuis PromptEngine.yaml
+        prompt_text = get_prompt(
+            "PSEUDOCODE_CONVERSION",
+            lang_key,
+            pseudocode=pseudocode,
+            program_name=program_name
+        )
+        
+        client = llm_client(max_tokens=4000, temperature=0.1)
+        
+        if not client:
+            st.markdown('<div class="error-box">❌ Client LLM indisponible</div>', 
+                        unsafe_allow_html=True)
+        else:
+            with st.spinner(T(
+                f"🧠 Génération du code {target_lang}...",
+                f"🧠 Generating {target_lang} code..."
+            )):
+                try:
+                    response = client.invoke(prompt_text)
+                    result = response.content if hasattr(response, 'content') else str(response)
+                    
+                    if result:
+                        # Nettoyage du résultat (enlever les ```cobol``` si présents)
+                        code_clean = result.strip()
+                        if code_clean.startswith("```"):
+                            code_clean = "\n".join(code_clean.split("\n")[1:-1])
+                        
+                        # Affichage du code généré
+                        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                        st.subheader(f"📘 Code {target_lang} Généré")
+                        st.code(code_clean, language="cobol" if "COBOL" in target_lang else "text")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Exports
+                        col1, col2 = st.columns(2)
+                        
+                        # Déterminer l'extension
+                        ext_map = {
+                            "COBOL": ".cbl",
+                            "PL/I": ".pli",
+                            "HLASM (Assembler)": ".asm"
+                        }
+                        file_ext = ext_map.get(target_lang, ".txt")
+                        
+                        with col1:
+                            st.download_button(
+                                f"💾 Télécharger {program_name}{file_ext}",
+                                data=code_clean.encode("utf-8"),
+                                file_name=f"{program_name}{file_ext}",
+                                use_container_width=True
+                            )
+                        
+                        with col2:
+                            # Export avec documentation complète
+                            doc_complete = f"""{'='*80}
+PROGRAMME MAINFRAME GÉNÉRÉ PAR IA
+{'='*80}
+Langage      : {target_lang}
+Programme    : {program_name}
+Date         : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+Généré par   : Assistant IA Mainframe Expert
+
+{'='*80}
+PSEUDO-CODE SOURCE
+{'='*80}
+{pseudocode}
+
+{'='*80}
+CODE {target_lang} GÉNÉRÉ
+{'='*80}
+{code_clean}
+
+{'='*80}
+FIN DU DOCUMENT
+{'='*80}
+"""
+                            st.download_button(
+                                "📄 Documentation complète (.txt)",
+                                data=doc_complete.encode("utf-8"),
+                                file_name=f"{program_name}_DOCUMENTATION.txt",
+                                use_container_width=True
+                            )
+                        
+                        # Métriques du code généré
+                        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+                        st.subheader("📊 " + T("Métriques du code", "Code Metrics"))
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Lignes de code", len(code_clean.split('\n')))
+                        with col2:
+                            st.metric("Caractères", len(code_clean))
+                        with col3:
+                            comment_lines = sum(1 for line in code_clean.split('\n') 
+                                               if line.strip().startswith('*') or '*>' in line)
+                            st.metric("Lignes commentées", comment_lines)
+                        
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la génération : {e}")
 # ===================== FOOTER PRO =====================
 st.markdown("""
 <div class="footer-pro">

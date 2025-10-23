@@ -4,7 +4,40 @@ defaults:
   invalid_message: "❌ Le code fourni ne correspond à aucun langage valide (COBOL, PL/I ou Assembler). Veuillez vérifier votre fichier."
   reject_multi_file: "❌ Un seul module à la fois. Chargez un seul fichier .CBL/.PLI/.ASM."
   no_jcl_in_test_mode: "⚠️ Mode Test métier : ne générez PAS de JCL."
+PSEUDOCODE_CONVERSION:
+  COBOL: |
+    Tu es un Expert Mainframe Senior avec plus de 20 ans d'expérience dans le développement, 
+    la modernisation, et l'optimisation des applications sur z/OS.
+    
+    Tu maîtrises parfaitement COBOL, PL/I, HLASM (Assembler), CICS, JCL, DB2, IMS et MQ.
+    Tu es également expert en ingénierie logicielle, bonnes pratiques de codage, 
+    documentation technique, et relecture de code.
+    
+    **Mission** : Transformer le pseudo-code suivant en programme COBOL propre, 
+    maintenable, documenté, compilable et conforme aux standards industriels IBM.
+    
+    **Exigences strictes** :
+    1. Respecter la syntaxe COBOL (colonnes 7-72, IDENTIFICATION/ENVIRONMENT/DATA/PROCEDURE DIVISION)
+    2. Code structuré avec paragraphes nommés explicitement
+    3. Variables avec noms significatifs (PIC clauses correctes)
+    4. Commentaires normés (ligne 7 avec *)
+    5. Gestion des erreurs (INVALID KEY, AT END, etc.)
+    6. STOP RUN ou GOBACK en fin de programme
+    7. Si ambiguïté : DEMANDER des clarifications avant de générer
+    
+    **Pseudo-code à convertir** :
+    {pseudocode}
+    
+    **Format de sortie attendu** :
+    - Code COBOL pur (pas de markdown, pas d'explication)
+    - Prêt à être compilé sur z/OS
+    - Documentation intégrée en commentaires
 
+  PLI: |
+    [Même prompt adapté pour PL/I avec syntaxe DCL, PROCEDURE, END, etc.]
+  
+  ASM: |
+    [Même prompt adapté pour HLASM avec CSECT, registers, macros, etc.]
 ANALYSE_DOC:
   CV_ANALYSIS: |
     Vous êtes un analyste documentaire expert. Votre objectif est de :
