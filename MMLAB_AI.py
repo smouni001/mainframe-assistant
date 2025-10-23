@@ -648,21 +648,21 @@ TEXTS = {
     "Français": {
         "choose_mode": "⚙️ Mode de traitement",
         "modes": [
-            "📄 Analyse documentaire", 
+            "🔄 Pseudo-Code → Mainframe",
             "🔧 Génération JCL", 
             "🧪 Test COBOL",
-            "⚙️ Analyse RGC",
-            "🔄 Pseudo-Code → Mainframe"
+            "📄 Analyse documentaire", 
+            "⚙️ Analyse RGC"
         ],
     },
     "English": {
         "choose_mode": "⚙️ Processing Mode",
         "modes": [
-            "📄 Document Analysis", 
+            "🔄 Pseudo-Code → Mainframe",
             "🔧 JCL Generation", 
             "🧪 COBOL Testing",
-            "⚙️ RGC Analysis",
-            "🔄 Pseudo-Code → Mainframe"
+            "📄 Document Analysis", 
+            "⚙️ RGC Analysis"
         ],
     }
 }
