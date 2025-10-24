@@ -960,7 +960,470 @@ class ApplicationAnalyzer:
             "dependency_graph": graph_dict,
             "metrics_summary": self.compute_metrics()
         }
+# ===================== REVERSE ENGINEERING CLASSES =====================
+import re
+import json
+from dataclasses import dataclass, asdict, field
+from typing import Dict, Set, List, Optional
+from collections import defaultdict
+from enum import Enum
 
+class ComponentType(Enum):
+    """Types de composants Mainframe"""
+    COBOL_BATCH = "COBOL_BATCH"
+    COBOL_CICS = "COBOL_CICS"
+    COBOL_IMS = "COBOL_IMS"
+    COBOL_DB2 = "COBOL_DB2"
+    COBOL_HYBRID = "COBOL_HYBRID"
+    JCL = "JCL"
+    COPYBOOK = "COPYBOOK"
+    BMS_MAP = "BMS_MAP"
+    DB2_TABLE = "DB2_TABLE"
+    IMS_SEGMENT = "IMS_SEGMENT"
+    MQ_QUEUE = "MQ_QUEUE"
+    VSAM_FILE = "VSAM_FILE"
+    TRANSACTION = "TRANSACTION"
+
+@dataclass
+class CallInfo:
+    """Information sur un appel"""
+    caller: str
+    callee: str
+    call_type: str
+    line_number: Optional[int] = None
+    context: Optional[str] = None
+
+@dataclass
+class ProgramMetadata:
+    """Métadonnées complètes d'un programme"""
+    name: str
+    path: str
+    component_type: ComponentType
+    lines: int
+    paragraphs: int
+    sections: int
+    
+    calls_static: List[str] = field(default_factory=list)
+    calls_dynamic: List[str] = field(default_factory=list)
+    calls_cics: List[Dict[str, str]] = field(default_factory=list)
+    calls_ims: List[Dict[str, str]] = field(default_factory=list)
+    calls_db2: List[str] = field(default_factory=list)
+    calls_mq: List[str] = field(default_factory=list)
+    
+    copybooks: List[str] = field(default_factory=list)
+    files_vsam: List[str] = field(default_factory=list)
+    files_sequential: List[str] = field(default_factory=list)
+    db2_tables: List[str] = field(default_factory=list)
+    ims_segments: List[str] = field(default_factory=list)
+    mq_queues: List[str] = field(default_factory=list)
+    
+    transactions: List[str] = field(default_factory=list)
+    bms_maps: List[str] = field(default_factory=list)
+    
+    called_by: List[str] = field(default_factory=list)
+    calls_to: List[str] = field(default_factory=list)
+    
+    is_orphan: bool = False
+    is_critical: bool = False
+    complexity_score: int = 0
+    risk_level: str = "LOW"
+
+class AdvancedCOBOLParser:
+    """Parser COBOL avancé avec détection CICS/IMS/DB2/MQ"""
+    
+    @staticmethod
+    def parse(content: str, filename: str) -> ProgramMetadata:
+        lines = content.split('\n')
+        
+        prog_name = filename.replace('.cbl', '').replace('.cob', '').upper()
+        for line in lines:
+            if 'PROGRAM-ID' in line.upper():
+                match = re.search(r'PROGRAM-ID\.\s+(\w+)', line.upper())
+                if match:
+                    prog_name = match.group(1)
+                    break
+        
+        content_upper = content.upper()
+        component_type = ComponentType.COBOL_BATCH
+        
+        if 'EXEC CICS' in content_upper:
+            component_type = ComponentType.COBOL_CICS
+        if 'DLITCBL' in content_upper or 'ENTRY \'DLITCBL\'' in content_upper:
+            component_type = ComponentType.COBOL_IMS
+        if 'EXEC SQL' in content_upper:
+            if component_type == ComponentType.COBOL_CICS:
+                component_type = ComponentType.COBOL_HYBRID
+            else:
+                component_type = ComponentType.COBOL_DB2
+        
+        total_lines = len([l for l in lines if l.strip() and not l.strip().startswith('*')])
+        paragraphs = len(re.findall(r'^\s*[A-Z0-9\-]+\s*\.\s*$', content, re.MULTILINE))
+        sections = content_upper.count(' SECTION.')
+        
+        copybooks = list(set(re.findall(r'COPY\s+(\w+)', content_upper)))
+        calls_static = list(set(re.findall(r'CALL\s+[\'"](\w+)[\'"]', content_upper)))
+        calls_dynamic = list(set(re.findall(r'CALL\s+(\w+)\s+USING', content_upper)))
+        calls_dynamic = [c for c in calls_dynamic if c not in calls_static and c not in ['CBLTDLI', 'MQPUT', 'MQGET']]
+        
+        calls_cics = []
+        for match in re.finditer(r'EXEC\s+CICS\s+(LINK|XCTL|START)\s+.*?PROGRAM\s*\(\s*[\'"]?(\w+)[\'"]?\s*\)', content_upper):
+            calls_cics.append({'type': match.group(1), 'program': match.group(2)})
+        
+        transactions = list(set(re.findall(r'EXEC\s+CICS\s+START\s+TRANSID\s*\(\s*[\'"]?(\w+)[\'"]?\s*\)', content_upper)))
+        bms_maps = list(set(re.findall(r'EXEC\s+CICS\s+(?:SEND|RECEIVE)\s+MAP\s*\(\s*[\'"]?(\w+)[\'"]?\s*\)', content_upper)))
+        
+        calls_ims = []
+        ims_segments = []
+        for match in re.finditer(r'CALL\s+[\'"]CBLTDLI[\'"].*?USING\s+(\w+)', content_upper):
+            calls_ims.append({'type': 'DL/I', 'function': match.group(1)})
+        
+        ims_segments = list(set(re.findall(r'(\w+SEGMENT|\w+SEG)', content_upper)))
+        
+        db2_tables = []
+        for match in re.finditer(r'EXEC\s+SQL\s+(?:SELECT|UPDATE|DELETE|INSERT).*?(?:FROM|INTO|UPDATE)\s+(\w+)', content_upper, re.DOTALL):
+            table = match.group(1).split()[0]
+            if table not in ['DUAL', 'SYSIBM']:
+                db2_tables.append(table)
+        db2_tables = list(set(db2_tables))
+        
+        mq_queues = []
+        calls_mq = []
+        if 'MQPUT' in content_upper or 'MQGET' in content_upper:
+            calls_mq = ['MQPUT', 'MQGET']
+            mq_queues = list(set(re.findall(r'QUEUE\s*\(\s*[\'"]?(\w+)[\'"]?\s*\)', content_upper)))
+        
+        files_vsam = []
+        files_sequential = []
+        
+        for match in re.finditer(r'SELECT\s+(\w+)\s+ASSIGN\s+TO\s+(\w+)', content_upper):
+            file_name = match.group(1)
+            if 'VSAM' in content_upper or 'KSDS' in content_upper:
+                files_vsam.append(file_name)
+            else:
+                files_sequential.append(file_name)
+        
+        complexity_score = (
+            len(calls_static) * 2 +
+            len(calls_dynamic) * 3 +
+            len(calls_cics) * 2 +
+            len(calls_ims) * 3 +
+            len(db2_tables) * 2 +
+            content_upper.count('IF ') +
+            content_upper.count('PERFORM ') +
+            content_upper.count('EVALUATE ')
+        )
+        
+        risk_level = "LOW"
+        if complexity_score > 50:
+            risk_level = "HIGH"
+        elif complexity_score > 25:
+            risk_level = "MEDIUM"
+        
+        return ProgramMetadata(
+            name=prog_name,
+            path=filename,
+            component_type=component_type,
+            lines=total_lines,
+            paragraphs=paragraphs,
+            sections=sections,
+            calls_static=calls_static,
+            calls_dynamic=calls_dynamic,
+            calls_cics=calls_cics,
+            calls_ims=calls_ims,
+            calls_db2=db2_tables,
+            calls_mq=calls_mq,
+            copybooks=copybooks,
+            files_vsam=files_vsam,
+            files_sequential=files_sequential,
+            db2_tables=db2_tables,
+            ims_segments=ims_segments,
+            mq_queues=mq_queues,
+            transactions=transactions,
+            bms_maps=bms_maps,
+            complexity_score=complexity_score,
+            risk_level=risk_level
+        )
+
+class AdvancedJCLParser:
+    """Parser JCL avancé"""
+    
+    @staticmethod
+    def parse(content: str, filename: str) -> Dict:
+        lines = content.split('\n')
+        
+        job_name = "UNKNOWN"
+        steps = []
+        current_step = None
+        
+        for line in lines:
+            line = line.strip()
+            
+            if line.startswith('//') and 'JOB' in line:
+                match = re.match(r'//(\w+)\s+JOB', line)
+                if match:
+                    job_name = match.group(1)
+            
+            elif line.startswith('//') and 'EXEC' in line:
+                if current_step:
+                    steps.append(current_step)
+                
+                match = re.match(r'//(\w+)\s+EXEC', line)
+                if match:
+                    step_name = match.group(1)
+                    
+                    pgm_match = re.search(r'PGM=(\w+)', line)
+                    proc_match = re.search(r'PROC=(\w+)', line)
+                    
+                    current_step = {
+                        'name': step_name,
+                        'program': pgm_match.group(1) if pgm_match else None,
+                        'proc': proc_match.group(1) if proc_match else None,
+                        'cond': re.search(r'COND=\(([^)]+)\)', line).group(1) if 'COND=' in line else None,
+                        'datasets': []
+                    }
+            
+            elif line.startswith('//') and 'DD' in line and current_step:
+                dsn_match = re.search(r'DSN=([^,\s]+)', line)
+                if dsn_match:
+                    current_step['datasets'].append(dsn_match.group(1))
+        
+        if current_step:
+            steps.append(current_step)
+        
+        return {
+            'job_name': job_name,
+            'filename': filename,
+            'steps': steps
+        }
+
+class MainframeReverseEngineer:
+    """Analyseur principal de paysage applicatif"""
+    
+    def __init__(self):
+        self.programs: Dict[str, ProgramMetadata] = {}
+        self.jcl_jobs: List[Dict] = []
+        self.copybooks: Set[str] = set()
+        self.transactions: Dict[str, str] = {}
+        self.bms_maps: Dict[str, List[str]] = defaultdict(list)
+        self.db2_tables: Set[str] = set()
+        self.ims_segments: Set[str] = set()
+        self.mq_queues: Set[str] = set()
+        self.call_graph: Dict[str, Set[str]] = defaultdict(set)
+        self.reverse_call_graph: Dict[str, Set[str]] = defaultdict(set)
+    
+    def analyze_sources(self, files: List[Tuple[str, bytes]]):
+        """Analyse tous les fichiers sources"""
+        
+        for filename, content_bytes in files:
+            try:
+                content = content_bytes.decode('utf-8', errors='ignore')
+                basename = filename.split('/')[-1].lower()
+                
+                if basename.endswith(('.cbl', '.cob')):
+                    prog_meta = AdvancedCOBOLParser.parse(content, filename)
+                    self.programs[prog_meta.name] = prog_meta
+                    
+                    self.copybooks.update(prog_meta.copybooks)
+                    self.db2_tables.update(prog_meta.db2_tables)
+                    self.ims_segments.update(prog_meta.ims_segments)
+                    self.mq_queues.update(prog_meta.mq_queues)
+                    
+                    for trans in prog_meta.transactions:
+                        self.transactions[trans] = prog_meta.name
+                    
+                    for bms_map in prog_meta.bms_maps:
+                        self.bms_maps[bms_map].append(prog_meta.name)
+                
+                elif basename.endswith('.jcl'):
+                    jcl_data = AdvancedJCLParser.parse(content, filename)
+                    self.jcl_jobs.append(jcl_data)
+                
+                elif basename.endswith(('.cpy', '.copy')):
+                    copy_name = basename.replace('.cpy', '').replace('.copy', '').upper()
+                    self.copybooks.add(copy_name)
+            
+            except Exception as e:
+                st.warning(f"⚠️ Erreur parsing {filename}: {e}")
+                continue
+        
+        self._build_call_graphs()
+        self._detect_orphans()
+        self._identify_critical_programs()
+    
+    def _build_call_graphs(self):
+        """Construit le graphe d'appels complet"""
+        
+        for prog_name, prog_meta in self.programs.items():
+            for callee in prog_meta.calls_static:
+                self.call_graph[prog_name].add(callee)
+                self.reverse_call_graph[callee].add(prog_name)
+                prog_meta.calls_to.append(callee)
+            
+            for cics_call in prog_meta.calls_cics:
+                callee = cics_call['program']
+                self.call_graph[prog_name].add(callee)
+                self.reverse_call_graph[callee].add(prog_name)
+                prog_meta.calls_to.append(callee)
+            
+            for jcl in self.jcl_jobs:
+                for step in jcl['steps']:
+                    if step['program'] == prog_name:
+                        self.reverse_call_graph[prog_name].add(f"JCL:{jcl['job_name']}")
+        
+        for prog_name, prog_meta in self.programs.items():
+            prog_meta.called_by = list(self.reverse_call_graph.get(prog_name, []))
+    
+    def _detect_orphans(self):
+        """Détecte les programmes non utilisés"""
+        
+        for prog_name, prog_meta in self.programs.items():
+            if not prog_meta.called_by and prog_name not in [step['program'] for jcl in self.jcl_jobs for step in jcl['steps']]:
+                prog_meta.is_orphan = True
+    
+    def _identify_critical_programs(self):
+        """Identifie les programmes critiques (centraux)"""
+        
+        for prog_name, prog_meta in self.programs.items():
+            if (len(prog_meta.called_by) >= 3 or 
+                len(prog_meta.calls_to) >= 5 or 
+                prog_meta.complexity_score > 40):
+                prog_meta.is_critical = True
+    
+    def compute_statistics(self) -> Dict:
+        """Calcule les statistiques globales"""
+        
+        stats = {
+            'total_programs': len(self.programs),
+            'cobol_batch': sum(1 for p in self.programs.values() if p.component_type == ComponentType.COBOL_BATCH),
+            'cobol_cics': sum(1 for p in self.programs.values() if p.component_type == ComponentType.COBOL_CICS),
+            'cobol_ims': sum(1 for p in self.programs.values() if p.component_type == ComponentType.COBOL_IMS),
+            'cobol_db2': sum(1 for p in self.programs.values() if p.component_type == ComponentType.COBOL_DB2),
+            'cobol_hybrid': sum(1 for p in self.programs.values() if p.component_type == ComponentType.COBOL_HYBRID),
+            'total_jcl': len(self.jcl_jobs),
+            'total_copybooks': len(self.copybooks),
+            'total_transactions': len(self.transactions),
+            'total_bms_maps': len(self.bms_maps),
+            'total_db2_tables': len(self.db2_tables),
+            'total_ims_segments': len(self.ims_segments),
+            'total_mq_queues': len(self.mq_queues),
+            'orphan_programs': sum(1 for p in self.programs.values() if p.is_orphan),
+            'critical_programs': sum(1 for p in self.programs.values() if p.is_critical),
+            'high_risk_programs': sum(1 for p in self.programs.values() if p.risk_level == 'HIGH'),
+            'total_lines': sum(p.lines for p in self.programs.values()),
+            'avg_complexity': sum(p.complexity_score for p in self.programs.values()) / max(1, len(self.programs))
+        }
+        
+        return stats
+    
+    def build_dependency_graph(self):
+        """Construit le graphe NetworkX complet"""
+        
+        try:
+            import networkx as nx
+        except ImportError:
+            return None
+        
+        G = nx.DiGraph()
+        
+        for prog_name, prog_meta in self.programs.items():
+            G.add_node(
+                prog_name, 
+                type='PROGRAM',
+                component_type=prog_meta.component_type.value,
+                is_critical=prog_meta.is_critical,
+                is_orphan=prog_meta.is_orphan,
+                risk_level=prog_meta.risk_level
+            )
+        
+        for table in self.db2_tables:
+            G.add_node(table, type='DB2_TABLE')
+        
+        for segment in self.ims_segments:
+            G.add_node(segment, type='IMS_SEGMENT')
+        
+        for queue in self.mq_queues:
+            G.add_node(queue, type='MQ_QUEUE')
+        
+        for caller, callees in self.call_graph.items():
+            for callee in callees:
+                G.add_edge(caller, callee, type='CALL')
+        
+        for prog_name, prog_meta in self.programs.items():
+            for table in prog_meta.db2_tables:
+                G.add_edge(prog_name, table, type='DB2_ACCESS')
+            
+            for segment in prog_meta.ims_segments:
+                G.add_edge(prog_name, segment, type='IMS_ACCESS')
+            
+            for queue in prog_meta.mq_queues:
+                G.add_edge(prog_name, queue, type='MQ_ACCESS')
+        
+        return G
+    
+    def generate_report_json(self) -> Dict:
+        """Génère le rapport JSON complet"""
+        
+        return {
+            'meta': {
+                'project': 'Mainframe Reverse Engineering',
+                'analyzed_at': datetime.now().isoformat(),
+                'analyzer_version': '2.0'
+            },
+            'statistics': self.compute_statistics(),
+            'programs': {
+                name: {
+                    **asdict(meta),
+                    'component_type': meta.component_type.value
+                } 
+                for name, meta in self.programs.items()
+            },
+            'jcl_jobs': self.jcl_jobs,
+            'global_resources': {
+                'copybooks': list(self.copybooks),
+                'transactions': self.transactions,
+                'bms_maps': dict(self.bms_maps),
+                'db2_tables': list(self.db2_tables),
+                'ims_segments': list(self.ims_segments),
+                'mq_queues': list(self.mq_queues)
+            },
+            'call_graph': {
+                caller: list(callees) 
+                for caller, callees in self.call_graph.items()
+            }
+        }
+    
+    def search_impact(self, program_name: str) -> Dict:
+        """Recherche d'impact : qui sera affecté si on modifie ce programme"""
+        
+        if program_name not in self.programs:
+            return {'error': f'Programme {program_name} non trouvé'}
+        
+        impacted = set()
+        direct_callers = self.reverse_call_graph.get(program_name, set())
+        impacted.update(direct_callers)
+        
+        def find_callers_recursive(prog, visited=None):
+            if visited is None:
+                visited = set()
+            if prog in visited:
+                return
+            visited.add(prog)
+            
+            for caller in self.reverse_call_graph.get(prog, []):
+                impacted.add(caller)
+                find_callers_recursive(caller, visited)
+        
+        find_callers_recursive(program_name)
+        
+        return {
+            'modified_program': program_name,
+            'direct_impact': list(direct_callers),
+            'total_impacted': list(impacted),
+            'impact_count': len(impacted),
+            'risk_assessment': 'HIGH' if len(impacted) > 10 else 'MEDIUM' if len(impacted) > 3 else 'LOW'
+        }
+
+# ===================== UI LABELS =====================
 # ===================== UI LABELS =====================
 TEXTS = {
     "Français": {
@@ -2846,127 +3309,150 @@ FIN DU DOCUMENT
         
         st.markdown('</div>', unsafe_allow_html=True)
 # ===================== MODE 7 : APPLICATION ANALYZER =====================
-# ===================== MODE 7 : APPLICATION ANALYZER =====================
+# ===================== MODE 7 : APPLICATION ANALYZER PRO =====================
 elif mode == TXT["modes"][6]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("🔍 " + T(
-        "Application Analyzer - Analyse Statique Legacy", 
-        "Application Analyzer - Legacy Static Analysis"
+        "Application Analyzer - Reverse Engineering Mainframe Complet", 
+        "Application Analyzer - Complete Mainframe Reverse Engineering"
     ))
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("""
     <div class="info-box">
-        🎯 <strong>Analyse complète de code Mainframe</strong><br>
-        Analysez automatiquement vos applications legacy :<br>
-        • ✅ Parse COBOL, JCL, Copybooks depuis un ZIP<br>
-        • ✅ Extrait dépendances et datasets<br>
-        • ✅ Calcule métriques et complexité<br>
-        • ✅ Génère graphe de dépendances<br>
-        • ✅ Rapport JSON + Markdown + Excel<br>
-        • ✅ Export ZIP complet<br>
+        🎯 <strong>Analyse complète de paysage applicatif Mainframe</strong><br>
+        Reconstruction automatique de la cartographie technique et fonctionnelle :<br>
         <br>
-        <strong>Format attendu :</strong> Fichier ZIP contenant .cbl, .cob, .jcl, .txt, .cpy
+        <strong>✅ Détection automatique :</strong><br>
+        • COBOL Batch / CICS / IMS / DB2 / MQ / Hybrid<br>
+        • Appels : CALL statique, CALL dynamique, CICS LINK/XCTL, IMS DL/I, EXEC SQL<br>
+        • Transactions CICS et BMS Maps<br>
+        • Tables DB2 et Segments IMS<br>
+        • Queues MQ et fichiers VSAM<br>
+        <br>
+        <strong>📊 Fonctionnalités avancées :</strong><br>
+        • Graphe de dépendances complet (programmes + ressources)<br>
+        • Détection programmes orphelins et critiques<br>
+        • Recherche d'impact (analyse de dépendances récursive)<br>
+        • Détection circular dependencies<br>
+        • Score de complexité et niveau de risque<br>
+        • Plan de migration recommandé<br>
+        <br>
+        <strong>📄 Exports :</strong> JSON, Excel multi-feuilles, Markdown FR/EN, ZIP complet, Graphviz .dot<br>
+        <br>
+        <strong>Format attendu :</strong> ZIP contenant .cbl, .cob, .jcl, .cpy, .bms, .txt
     </div>
     """, unsafe_allow_html=True)
 
-    # Upload ZIP unique
+    # Upload ZIP
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.subheader("📂 " + T("Chargement du ZIP source", "Source ZIP Upload"))
     
-    uploaded_zip = st.file_uploader(
-        "📦 " + T("Fichier ZIP (COBOL, JCL, COPY)", "ZIP file (COBOL, JCL, COPY)"),
+    uploaded_zip_analyzer = st.file_uploader(
+        "📦 " + T("Fichier ZIP (Application Mainframe complète)", "ZIP file (Complete Mainframe Application)"),
         type=["zip"],
         help=T(
-            "Sélectionnez un fichier ZIP contenant tous vos sources mainframe",
-            "Select a ZIP file containing all your mainframe sources"
+            "ZIP contenant programmes COBOL, JCL, copybooks, BMS, données...",
+            "ZIP containing COBOL programs, JCL, copybooks, BMS, data..."
         ),
-        key="analyzer_zip_uploader"
+        key="app_analyzer_zip_uploader"
     )
     
-    if uploaded_zip:
+    if uploaded_zip_analyzer:
         st.markdown(f"""
         <div class="success-box">
-            ✅ <strong>ZIP chargé : {uploaded_zip.name}</strong>
+            ✅ <strong>ZIP chargé : {uploaded_zip_analyzer.name}</strong> ({uploaded_zip_analyzer.size / 1024:.1f} KB)
         </div>
         """, unsafe_allow_html=True)
         
-        # Extraction et lecture du ZIP
+        # Extraction du ZIP
         try:
-            with zipfile.ZipFile(uploaded_zip, "r") as zip_ref:
+            with zipfile.ZipFile(uploaded_zip_analyzer, "r") as zip_ref:
                 file_list = zip_ref.namelist()
                 
-                # Filtrer les fichiers valides
                 valid_files = []
+                skipped_files = []
+                
                 for filename in file_list:
-                    # Ignorer les dossiers, fichiers système et __MACOSX
-                    if filename.endswith('/') or filename.startswith('__MACOSX') or filename.startswith('.'):
+                    # Ignorer dossiers et fichiers système
+                    if filename.endswith('/') or filename.startswith(('__MACOSX', '.', '_')):
+                        skipped_files.append(filename)
                         continue
                     
-                    # Vérifier les extensions supportées
-                    if any(filename.lower().endswith(ext) for ext in ['.cbl', '.cob', '.jcl', '.txt', '.cpy', '.copy']):
+                    # Extensions supportées
+                    if any(filename.lower().endswith(ext) for ext in ['.cbl', '.cob', '.jcl', '.txt', '.cpy', '.copy', '.bms', '.asm']):
                         try:
                             content = zip_ref.read(filename)
                             valid_files.append((filename, content))
                         except Exception as e:
                             st.warning(f"⚠️ Impossible de lire {filename}: {e}")
-                            continue
+                    else:
+                        skipped_files.append(filename)
                 
-                # Stocker dans session_state
                 st.session_state.analyzer_uploaded_files = valid_files
                 
                 if valid_files:
                     st.markdown(f"""
                     <div class="success-box">
-                        ✅ <strong>{len(valid_files)} fichier(s) extrait(s) du ZIP</strong>
+                        ✅ <strong>{len(valid_files)} fichier(s) extrait(s) et prêt(s) à analyser</strong>
                     </div>
                     """, unsafe_allow_html=True)
                     
-                    # Aperçu des fichiers avec structure arborescente
-                    st.markdown("**📋 Structure du projet détectée :**")
-                    
-                    # Organiser par type
+                    # Aperçu détaillé par type
                     file_types = defaultdict(list)
                     for fname, _ in valid_files:
-                        basename = fname.split('/')[-1]  # Nom du fichier sans chemin
-                        if basename.lower().endswith(('.cbl', '.cob')):
-                            file_types['COBOL'].append(basename)
-                        elif basename.lower().endswith('.jcl'):
-                            file_types['JCL'].append(basename)
-                        elif basename.lower().endswith(('.cpy', '.copy')):
-                            file_types['COPYBOOK'].append(basename)
+                        basename = fname.split('/')[-1].lower()
+                        if basename.endswith(('.cbl', '.cob')):
+                            file_types['COBOL'].append(fname)
+                        elif basename.endswith('.jcl'):
+                            file_types['JCL'].append(fname)
+                        elif basename.endswith(('.cpy', '.copy')):
+                            file_types['COPYBOOK'].append(fname)
+                        elif basename.endswith('.bms'):
+                            file_types['BMS'].append(fname)
+                        elif basename.endswith('.asm'):
+                            file_types['ASM'].append(fname)
                         else:
-                            file_types['AUTRE'].append(basename)
+                            file_types['AUTRE'].append(fname)
                     
-                    # Affichage des métriques
-                    col1, col2, col3, col4 = st.columns(4)
+                    # Métriques
+                    col1, col2, col3, col4, col5 = st.columns(5)
                     col1.metric("📘 COBOL", len(file_types.get('COBOL', [])))
                     col2.metric("🔧 JCL", len(file_types.get('JCL', [])))
                     col3.metric("📖 COPYBOOK", len(file_types.get('COPYBOOK', [])))
-                    col4.metric("📄 AUTRE", len(file_types.get('AUTRE', [])))
+                    col4.metric("🖥️ BMS", len(file_types.get('BMS', [])))
+                    col5.metric("⚙️ ASM", len(file_types.get('ASM', [])))
                     
-                    # Affichage détaillé dans un expander
-                    with st.expander("🔍 Voir le détail des fichiers"):
-                        for ftype, files in file_types.items():
+                    # Détails dans un expander
+                    with st.expander("🔍 Détail des fichiers par catégorie"):
+                        for ftype, files in sorted(file_types.items()):
                             if files:
                                 st.markdown(f"**{ftype} ({len(files)}) :**")
-                                for f in sorted(files)[:20]:  # Limiter à 20 pour l'affichage
+                                for f in sorted(files)[:15]:
                                     st.text(f"  • {f}")
-                                if len(files) > 20:
-                                    st.caption(f"... et {len(files) - 20} autres fichiers")
+                                if len(files) > 15:
+                                    st.caption(f"... et {len(files) - 15} autres fichiers")
                                 st.markdown("---")
+                    
+                    # Fichiers ignorés
+                    if skipped_files:
+                        with st.expander(f"⚠️ {len(skipped_files)} fichier(s) ignoré(s)"):
+                            for f in skipped_files[:20]:
+                                st.text(f"  • {f}")
+                            if len(skipped_files) > 20:
+                                st.caption(f"... et {len(skipped_files) - 20} autres")
                 else:
                     st.markdown("""
                     <div class="warning-box">
-                        ⚠️ Aucun fichier valide trouvé dans le ZIP<br>
-                        Formats supportés : .cbl, .cob, .jcl, .txt, .cpy, .copy
+                        ⚠️ <strong>Aucun fichier valide trouvé dans le ZIP</strong><br>
+                        Formats supportés : .cbl, .cob, .jcl, .txt, .cpy, .copy, .bms, .asm
                     </div>
                     """, unsafe_allow_html=True)
         
         except zipfile.BadZipFile:
             st.markdown("""
             <div class="error-box">
-                ❌ Le fichier uploadé n'est pas un ZIP valide
+                ❌ <strong>Le fichier uploadé n'est pas un ZIP valide</strong>
             </div>
             """, unsafe_allow_html=True)
         
@@ -2977,395 +3463,1508 @@ elif mode == TXT["modes"][6]:
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Options d'analyse
-    # Options d'analyse
+    # Options d'analyse avancées
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("⚙️ " + T("Options d'analyse", "Analysis Options"))
+    st.subheader("⚙️ " + T("Options d'analyse avancées", "Advanced Analysis Options"))
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
-        analyze_deps = st.checkbox(
-            "🔗 Graphe de dépendances",
+        detect_orphans = st.checkbox(
+            "🚫 Détecter orphelins",
             value=True,
-            help=T("Générer le graphe des dépendances", "Generate dependency graph"),
-            key="analyzer_deps_checkbox"  # ← CORRIGÉ
+            help=T("Programmes jamais appelés", "Never called programs"),
+            key="app_analyzer_orphans_checkbox"
         )
     with col2:
-        analyze_metrics = st.checkbox(
-            "📊 Métriques détaillées",
+        detect_critical = st.checkbox(
+            "⚠️ Identifier critiques",
             value=True,
-            help=T("Calculer les métriques par programme", "Calculate metrics per program"),
-            key="analyzer_metrics_checkbox"  # ← CORRIGÉ
+            help=T("Programmes centraux à risque", "Critical central programs"),
+            key="app_analyzer_critical_checkbox"
         )
     with col3:
-        generate_report = st.checkbox(
-            "📄 Rapport complet",
+        detect_cycles = st.checkbox(
+            "🔄 Détecter cycles",
             value=True,
-            help=T("Générer rapport Markdown + JSON", "Generate Markdown + JSON report"),
-            key="analyzer_report_checkbox"  # ← CORRIGÉ
+            help=T("Dépendances circulaires", "Circular dependencies"),
+            key="app_analyzer_cycles_checkbox"
+        )
+    with col4:
+        build_full_graph = st.checkbox(
+            "🔗 Graphe complet",
+            value=True,
+            help=T("Graphe avec ressources", "Graph with resources"),
+            key="app_analyzer_graph_checkbox"
         )
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Informations sur la structure ZIP attendue
-    with st.expander("ℹ️ Structure ZIP recommandée"):
-        st.markdown("""
-        ```
-        mon_projet.zip
-        ├── src/
-        │   ├── BK01LOAD.cbl
-        │   ├── BK02ORDR.cbl
-        │   └── BK03STCK.cob
-        ├── copybooks/
-        │   ├── CUSTOMER.cpy
-        │   └── ORDERS.copy
-        ├── jcl/
-        │   ├── BOOKMAST.jcl
-        │   └── RUNBOOKS.txt
-        └── data/
-            └── sample.txt
-        ```
+    # Structure ZIP recommandée
+    with st.expander("📚 Structure ZIP recommandée et exemples de patterns"):
+        col_left, col_right = st.columns(2)
         
-        **Note :** La structure interne du ZIP est flexible. Les fichiers peuvent être :
-        - À la racine du ZIP
-        - Dans des sous-dossiers (src/, jcl/, etc.)
-        - Mélangés dans n'importe quelle structure
+        with col_left:
+            st.markdown("""
+            **Structure idéale :**
+            ```
+            mon_application.zip
+            ├── src/
+            │   ├── batch/
+            │   │   ├── BK01LOAD.cbl
+            │   │   └── BK02ORDR.cbl
+            │   ├── cics/
+            │   │   ├── CUSTMAIN.cbl
+            │   │   └── ORDENTRY.cob
+            │   └── ims/
+            │       └── IMSUPD01.cbl
+            ├── copybooks/
+            │   ├── CUSTOMER.cpy
+            │   └── ORDERS.copy
+            ├── jcl/
+            │   ├── BOOKMAST.jcl
+            │   └── RUNBATCH.txt
+            ├── bms/
+            │   └── CUSTMAP.bms
+            └── data/
+                └── sample.txt
+            ```
+            
+            **Note :** Structure flexible, fichiers détectés par extension.
+            """)
         
-        L'analyseur détecte automatiquement les fichiers par extension.
-        """)
+        with col_right:
+            st.markdown("""
+            **Patterns détectés automatiquement :**
+            
+            **CICS :**
+            - `EXEC CICS LINK PROGRAM('PROG')`
+            - `EXEC CICS XCTL PROGRAM(...)`
+            - `EXEC CICS START TRANSID('TXN1')`
+            - `EXEC CICS SEND/RECEIVE MAP`
+            
+            **IMS :**
+            - `ENTRY 'DLITCBL'`
+            - `CALL 'CBLTDLI' USING GU/GN...`
+            - `PCB TYPE=DB`
+            
+            **DB2 :**
+            - `EXEC SQL SELECT ... FROM TABLE`
+            - `EXEC SQL UPDATE/INSERT/DELETE`
+            
+            **MQ :**
+            - `CALL 'MQPUT' USING ...`
+            - `CALL 'MQGET' USING ...`
+            
+            **Appels :**
+            - `CALL "PROGRAM" USING ...`
+            - `CALL variable-name USING ...`
+            """)
 
     # Bouton d'analyse
-    analyze_button = st.button(
-        "🚀 " + T("LANCER ANALYSE", "START ANALYSIS"),
-        disabled=not uploaded_zip or not st.session_state.analyzer_uploaded_files,
+    analyze_app_button = st.button(
+        "🚀 " + T("LANCER ANALYSE COMPLÈTE", "START COMPLETE ANALYSIS"),
+        disabled=not uploaded_zip_analyzer or not st.session_state.analyzer_uploaded_files,
         use_container_width=True,
-        key="analyzer_analyze_btn"
+        key="app_analyzer_analyze_btn"
     )
 
-    if analyze_button and st.session_state.analyzer_uploaded_files:
-        with st.spinner(T("🧠 Analyse en cours...", "🧠 Analyzing...")):
-            # Initialiser l'analyseur
-            analyzer = ApplicationAnalyzer()
+    # ========== ANALYSE (APPEL DE MainframeReverseEngineer) ==========
+    if analyze_app_button and st.session_state.analyzer_uploaded_files:
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        try:
+            # Étape 1 : Initialisation
+            status_text.text("🔧 Initialisation de l'analyseur...")
+            progress_bar.progress(10)
             
-            try:
-                # Analyser tous les fichiers
-                analyzer.analyze_files(st.session_state.analyzer_uploaded_files)
-                
-                # Calculer les métriques
-                computed_metrics = analyzer.compute_metrics()
-                
-                # Construire le graphe
-                dependency_graph = analyzer.build_dependency_graph() if analyze_deps else None
-                
-                # Générer le rapport JSON
-                generated_report = analyzer.generate_report_json()
-                
-                # Stocker dans session_state avec des noms distincts des widgets
-                st.session_state.analyzer_results = analyzer
-                st.session_state.analyzer_computed_metrics = computed_metrics  # ← CORRIGÉ
-                st.session_state.analyzer_dependency_graph = dependency_graph
-                st.session_state.analyzer_generated_report = generated_report  # ← CORRIGÉ
-                
-                st.success("✅ " + T("Analyse terminée !", "Analysis completed!"))
+            analyzer = MainframeReverseEngineer()
             
-            except Exception as e:
-                st.error(f"❌ Erreur lors de l'analyse : {e}")
-                import traceback
-                st.code(traceback.format_exc(), language="python")
+            # Étape 2 : Analyse des sources
+            status_text.text("📖 Analyse des fichiers sources...")
+            progress_bar.progress(30)
+            
+            analyzer.analyze_sources(st.session_state.analyzer_uploaded_files)
+            
+            # Étape 3 : Calcul des statistiques
+            status_text.text("📊 Calcul des statistiques...")
+            progress_bar.progress(50)
+            
+            stats = analyzer.compute_statistics()
+            
+            # Étape 4 : Construction du graphe
+            status_text.text("🔗 Construction du graphe de dépendances...")
+            progress_bar.progress(70)
+            
+            graph = analyzer.build_dependency_graph() if build_full_graph else None
+            
+            # Étape 5 : Détection des cycles
+            cycles = []
+            if detect_cycles and graph:
+                status_text.text("🔄 Détection des cycles...")
+                progress_bar.progress(85)
+                
+                try:
+                    import networkx as nx
+                    cycles = list(nx.simple_cycles(graph))
+                except:
+                    pass
+            
+            # Étape 6 : Génération du rapport
+            status_text.text("📄 Génération du rapport...")
+            progress_bar.progress(95)
+            
+            report_json = analyzer.generate_report_json()
+            
+            # Stockage dans session_state
+            st.session_state.analyzer_results = analyzer
+            st.session_state.analyzer_computed_metrics = stats
+            st.session_state.analyzer_dependency_graph = graph
+            st.session_state.analyzer_generated_report = report_json
+            st.session_state.analyzer_detected_cycles = cycles
+            
+            # Fin
+            progress_bar.progress(100)
+            status_text.empty()
+            progress_bar.empty()
+            
+            st.success("✅ " + T("Analyse terminée avec succès !", "Analysis completed successfully!"))
+            
+            # Résumé rapide
+            st.markdown(f"""
+            <div class="success-box">
+                📊 <strong>Résumé de l'analyse :</strong><br>
+                • {stats['total_programs']} programmes analysés<br>
+                • {stats['orphan_programs']} orphelins détectés<br>
+                • {stats['critical_programs']} programmes critiques<br>
+                • {len(cycles)} cycle(s) de dépendances<br>
+                • {stats['total_db2_tables']} tables DB2<br>
+                • {stats['total_transactions']} transactions CICS
+            </div>
+            """, unsafe_allow_html=True)
+        
+        except Exception as e:
+            st.error(f"❌ Erreur lors de l'analyse : {e}")
+            import traceback
+            st.code(traceback.format_exc(), language="python")
 
-    # Affichage des résultats (persistant)
+    # ========== AFFICHAGE DES RÉSULTATS ==========
     if st.session_state.analyzer_results:
         analyzer = st.session_state.analyzer_results
-        metrics = st.session_state.analyzer_computed_metrics  # ← CORRIGÉ
+        stats = st.session_state.analyzer_computed_metrics
         graph = st.session_state.analyzer_dependency_graph
-        report_json = st.session_state.analyzer_generated_report  # ← CORRIGÉ
+        report_json = st.session_state.analyzer_generated_report
+        cycles = st.session_state.get('analyzer_detected_cycles', [])
 
-        # Onglets d'affichage
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📊 Métriques Globales",
-            "📘 Programmes",
-            "🔧 JCL Steps",
-            "🗄️ Datasets",
-            "🔗 Graphe de Dépendances"
+        # Onglets professionnels
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            "📊 Dashboard",
+            "📘 Inventaire Programmes",
+            "🔗 Graphe Dépendances",
+            "🔍 Recherche Impact",
+            "⚠️ Alertes & Risques",
+            "📄 Rapports",
+            "💾 Exports"
         ])
-        
-        # [Le reste du code des TABs reste identique...]
-        # TAB 1 : Métriques
+
+        # ========== TAB 1 : DASHBOARD KPIs ==========
         with tab1:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("📊 Métriques Globales du Projet")
+            st.subheader("📊 Tableau de Bord - Vue d'Ensemble")
             
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("📦 Programmes", metrics['total_programs'])
-            col2.metric("🔧 Steps JCL", metrics['total_jcl_steps'])
-            col3.metric("🗄️ Datasets", metrics['total_datasets'])
-            col4.metric("📝 Lignes totales", metrics['total_lines'])
+            # KPIs principaux
+            col1, col2, col3, col4, col5 = st.columns(5)
+            col1.metric("📦 Programmes", stats['total_programs'])
+            col2.metric("📝 Lignes totales", f"{stats['total_lines']:,}")
+            col3.metric("🔧 Jobs JCL", stats['total_jcl'])
+            col4.metric("📖 Copybooks", stats['total_copybooks'])
+            col5.metric("🧮 Complexité moy.", f"{stats['avg_complexity']:.1f}")
             
             st.markdown("---")
+            st.markdown("**🏗️ Répartition par type de composant**")
             
-            col5, col6, col7 = st.columns(3)
-            col5.metric("🧮 Complexité moyenne", metrics['avg_complexity'])
-            col6.metric("⚠️ Complexité max", metrics['max_complexity'])
-            col7.metric("💾 Opérations I/O", metrics['total_io_operations'])
+            col6, col7, col8, col9, col10 = st.columns(5)
+            col6.metric("🟦 Batch", stats['cobol_batch'], help="Programmes COBOL batch classiques")
+            col7.metric("🟩 CICS", stats['cobol_cics'], help="Programmes transactionnels CICS")
+            col8.metric("🟨 IMS", stats['cobol_ims'], help="Programmes IMS DL/I")
+            col9.metric("🟪 DB2", stats['cobol_db2'], help="Programmes avec SQL embedded")
+            col10.metric("🟧 Hybrid", stats['cobol_hybrid'], help="Multi-environnements")
+            
+            st.markdown("---")
+            st.markdown("**🗄️ Ressources Mainframe identifiées**")
+            
+            col11, col12, col13, col14, col15 = st.columns(5)
+            col11.metric("🎫 Transactions", stats['total_transactions'])
+            col12.metric("🖥️ BMS Maps", stats['total_bms_maps'])
+            col13.metric("🗄️ Tables DB2", stats['total_db2_tables'])
+            col14.metric("📊 Segments IMS", stats['total_ims_segments'])
+            col15.metric("📨 Queues MQ", stats['total_mq_queues'])
+            
+            st.markdown("---")
+            st.markdown("**⚠️ Indicateurs de Risque et Qualité**")
+            
+            col16, col17, col18, col19 = st.columns(4)
+            
+            orphan_color = "inverse" if stats['orphan_programs'] > 0 else "off"
+            col16.metric(
+                "🚫 Orphelins", 
+                stats['orphan_programs'],
+                delta="À supprimer" if stats['orphan_programs'] > 0 else "✅",
+                delta_color=orphan_color
+            )
+            
+            critical_color = "inverse" if stats['critical_programs'] > 5 else "normal"
+            col17.metric(
+                "⚠️ Critiques", 
+                stats['critical_programs'],
+                delta="Risque élevé" if stats['critical_programs'] > 5 else "Acceptable",
+                delta_color=critical_color
+            )
+            
+            high_risk_color = "inverse" if stats['high_risk_programs'] > 0 else "off"
+            col18.metric(
+                "🔥 Haute complexité", 
+                stats['high_risk_programs'],
+                delta="À refactorer" if stats['high_risk_programs'] > 0 else "✅",
+                delta_color=high_risk_color
+            )
+            
+            cycles_color = "inverse" if len(cycles) > 0 else "off"
+            col19.metric(
+                "🔄 Cycles dépend.", 
+                len(cycles),
+                delta="À résoudre" if len(cycles) > 0 else "✅",
+                delta_color=cycles_color
+            )
             
             st.markdown('</div>', unsafe_allow_html=True)
             
-            # Graphiques
+            # Graphiques de distribution
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("📈 Visualisations")
+            st.subheader("📈 Analyses Visuelles")
             
             try:
                 import matplotlib.pyplot as plt
                 
-                # Graphique 1 : Distribution complexité
-                fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+                fig, axes = plt.subplots(2, 2, figsize=(16, 10))
                 fig.patch.set_facecolor('#1E1E2E')
                 
-                complexities = [p.complexity for p in analyzer.programs.values()]
-                axes[0].hist(complexities, bins=10, color='#4EA3FF', edgecolor='white')
-                axes[0].set_title('Distribution de la Complexité', color='white')
-                axes[0].set_xlabel('Complexité', color='white')
-                axes[0].set_ylabel('Nombre de programmes', color='white')
-                axes[0].tick_params(colors='white')
-                axes[0].set_facecolor('#262636')
+                # Graph 1 : Camembert types
+                types = ['Batch', 'CICS', 'IMS', 'DB2', 'Hybrid']
+                counts = [
+                    stats['cobol_batch'], 
+                    stats['cobol_cics'], 
+                    stats['cobol_ims'], 
+                    stats['cobol_db2'], 
+                    stats['cobol_hybrid']
+                ]
+                colors = ['#4EA3FF', '#00D9A5', '#FFB020', '#FF6B9D', '#A3FFD6']
                 
-                # Graphique 2 : Top 10 programmes par lignes
-                top_programs = sorted(analyzer.programs.values(), key=lambda p: p.lines, reverse=True)[:10]
-                names = [p.name[:15] for p in top_programs]
-                lines = [p.lines for p in top_programs]
+                axes[0, 0].pie(counts, labels=types, autopct='%1.1f%%', colors=colors, 
+                              textprops={'color': 'white', 'fontsize': 10})
+                axes[0, 0].set_title('Répartition par Type de Composant', color='white', fontsize=12, pad=20)
+                axes[0, 0].set_facecolor('#262636')
                 
-                axes[1].barh(names, lines, color='#00D9A5')
-                axes[1].set_title('Top 10 Programmes (lignes)', color='white')
-                axes[1].set_xlabel('Lignes de code', color='white')
-                axes[1].tick_params(colors='white')
-                axes[1].set_facecolor('#262636')
+                # Graph 2 : Top 10 complexité
+                top_complex = sorted(analyzer.programs.values(), key=lambda p: p.complexity_score, reverse=True)[:10]
+                if top_complex:
+                    names = [p.name[:12] for p in top_complex]
+                    scores = [p.complexity_score for p in top_complex]
+                    
+                    bars = axes[0, 1].barh(names, scores)
+                    # Couleur selon risque
+                    for i, bar in enumerate(bars):
+                        if top_complex[i].risk_level == 'HIGH':
+                            bar.set_color('#FF4757')
+                        elif top_complex[i].risk_level == 'MEDIUM':
+                            bar.set_color('#FFB020')
+                        else:
+                            bar.set_color('#00D9A5')
+                    
+                    axes[0, 1].set_title('Top 10 Programmes par Complexité', color='white', fontsize=12, pad=20)
+                    axes[0, 1].set_xlabel('Score de complexité', color='white')
+                    axes[0, 1].tick_params(colors='white')
+                    axes[0, 1].set_facecolor('#262636')
+                
+                # Graph 3 : Distribution lignes
+                if analyzer.programs:
+                    lines = [p.lines for p in analyzer.programs.values()]
+                    axes[1, 0].hist(lines, bins=20, color='#4EA3FF', edgecolor='white')
+                    axes[1, 0].set_title('Distribution Taille Programmes (lignes)', color='white', fontsize=12, pad=20)
+                    axes[1, 0].set_xlabel('Nombre de lignes', color='white')
+                    axes[1, 0].set_ylabel('Fréquence', color='white')
+                    axes[1, 0].tick_params(colors='white')
+                    axes[1, 0].set_facecolor('#262636')
+                
+                # Graph 4 : Ressources
+                resource_types = ['Trans CICS', 'Tables DB2', 'Seg IMS', 'Queues MQ']
+                resource_counts = [
+                    stats['total_transactions'],
+                    stats['total_db2_tables'],
+                    stats['total_ims_segments'],
+                    stats['total_mq_queues']
+                ]
+                resource_colors = ['#00D9A5', '#FFB020', '#FF6B9D', '#A3FFD6']
+                
+                axes[1, 1].bar(resource_types, resource_counts, color=resource_colors)
+                axes[1, 1].set_title('Ressources Mainframe Détectées', color='white', fontsize=12, pad=20)
+                axes[1, 1].set_ylabel('Nombre', color='white')
+                axes[1, 1].tick_params(colors='white')
+                axes[1, 1].set_facecolor('#262636')
                 
                 plt.tight_layout()
                 st.pyplot(fig)
             
             except ImportError:
-                st.info("💡 Installez matplotlib pour voir les graphiques")
+                st.info("💡 Installez matplotlib pour voir les graphiques : `pip install matplotlib`")
             
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # TAB 2 : Programmes
+        # ========== TAB 2 : INVENTAIRE ==========
         with tab2:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("📘 Liste des Programmes COBOL")
+            st.subheader("📘 Inventaire Complet des Programmes")
             
             if analyzer.programs:
                 df_programs = pd.DataFrame([
                     {
                         'Nom': p.name,
-                        'Fichier': p.path,
+                        'Type': p.component_type.value.replace('COBOL_', ''),
                         'Lignes': p.lines,
-                        'Complexité': p.complexity,
-                        'Paragraphes': p.paragraphs,
-                        'I/O Ops': p.io_operations,
-                        'Reads': ', '.join(p.reads[:3]),
-                        'Writes': ', '.join(p.writes[:3]),
-                        'Calls': ', '.join(p.calls[:3])
+                        'Paragraphes': p.paragraphes,
+                        'Sections': p.sections,
+                        'Complexité': p.complexity_score,
+                        'Risque': p.risk_level,
+                        'Appelé par': len(p.called_by),
+                        'Appelle': len(p.calls_to),
+                        'Orphelin': '🚫' if p.is_orphan else '',
+                        'Critique': '⚠️' if p.is_critical else '',
+                        'CICS': '✓' if p.calls_cics else '',
+                        'DB2': len(p.db2_tables) if p.db2_tables else '',
+                        'IMS': len(p.ims_segments) if p.ims_segments else '',
+                        'MQ': '✓' if p.mq_queues else '',
+                        'Copybooks': len(p.copybooks)
                     }
                     for p in analyzer.programs.values()
                 ])
                 
-                st.dataframe(df_programs, use_container_width=True, height=400)
+                # Tri par complexité décroissant
+                df_programs = df_programs.sort_values('Complexité', ascending=False)
+                
+                # Style conditionnel
+                def style_risk(val):
+                    if val == 'HIGH':
+                        return 'background-color: #FF4757; color: white; font-weight: bold;'
+                    elif val == 'MEDIUM':
+                        return 'background-color: #FFB020; color: black; font-weight: bold;'
+                    elif val == 'LOW':
+                        return 'background-color: #00D9A5; color: white;'
+                    return ''
+                
+                styled_df = df_programs.style.applymap(
+                    style_risk,
+                    subset=['Risque']
+                )
+                
+                # Filtres
+                col_filter1, col_filter2, col_filter3 = st.columns(3)
+                
+                with col_filter1:
+                    filter_type = st.multiselect(
+                        "Filtrer par type :",
+                        options=df_programs['Type'].unique(),
+                        key="app_analyzer_filter_type"
+                    )
+                
+                with col_filter2:
+                    filter_risk = st.multiselect(
+                        "Filtrer par risque :",
+                        options=['HIGH', 'MEDIUM', 'LOW'],
+                        key="app_analyzer_filter_risk"
+                    )
+                
+                with col_filter3:
+                    show_orphans_only = st.checkbox(
+                        "Orphelins uniquement",
+                        key="app_analyzer_show_orphans"
+                    )
+                
+                # Application des filtres
+                filtered_df = df_programs.copy()
+                
+                if filter_type:
+                    filtered_df = filtered_df[filtered_df['Type'].isin(filter_type)]
+                
+                if filter_risk:
+                    filtered_df = filtered_df[filtered_df['Risque'].isin(filter_risk)]
+                
+                if show_orphans_only:
+                    filtered_df = filtered_df[filtered_df['Orphelin'] == '🚫']
+                
+                st.markdown(f"**{len(filtered_df)} programme(s) affiché(s) sur {len(df_programs)}**")
+                
+                st.dataframe(
+                    filtered_df.style.applymap(style_risk, subset=['Risque']),
+                    use_container_width=True,
+                    height=500
+                )
                 
                 # Export CSV
-                csv_programs = df_programs.to_csv(index=False, sep=';', encoding='utf-8')
+                csv_inventory = filtered_df.to_csv(index=False, sep=';', encoding='utf-8')
                 st.download_button(
-                    "📥 Télécharger liste programmes (CSV)",
-                    data=csv_programs.encode('utf-8'),
-                    file_name="programs_list.csv",
-                    key="analyzer_download_programs_csv"
+                    "📥 Télécharger inventaire filtré (CSV)",
+                    data=csv_inventory.encode('utf-8'),
+                    file_name=f"programs_inventory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    key="app_analyzer_download_inventory_csv"
                 )
             else:
-                st.info("Aucun programme COBOL détecté")
+                st.info("Aucun programme détecté")
             
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # TAB 3 : JCL Steps
+        # La suite dans le prochain message (TAB 3-7)...
+            # ========== TAB 3 : GRAPHE DE DÉPENDANCES ==========
         with tab3:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("🔧 Steps JCL")
-            
-            if analyzer.jcl_steps:
-                df_jcl = pd.DataFrame([
-                    {
-                        'Step': s.name,
-                        'Job': s.job,
-                        'Programme': s.program,
-                        'Conditions': ', '.join(s.conds),
-                        'DD Names': ', '.join(s.dd_names[:5]),
-                        'Datasets': ', '.join(s.datasets[:3])
-                    }
-                    for s in analyzer.jcl_steps
-                ])
-                
-                st.dataframe(df_jcl, use_container_width=True, height=400)
-            else:
-                st.info("Aucun JCL détecté")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # TAB 4 : Datasets
-        with tab4:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("🗄️ Datasets Identifiés")
-            
-            if analyzer.datasets:
-                df_datasets = pd.DataFrame([
-                    {
-                        'Dataset': d.name,
-                        'Type': d.type,
-                        'Produit par': ', '.join(d.produced_by),
-                        'Consommé par': ', '.join(d.consumed_by)
-                    }
-                    for d in analyzer.datasets.values()
-                ])
-                
-                st.dataframe(df_datasets, use_container_width=True, height=400)
-            else:
-                st.info("Aucun dataset détecté")
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # TAB 5 : Graphe
-        with tab5:
-            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("🔗 Graphe de Dépendances")
+            st.subheader("🔗 Graphe de Dépendances Complet")
             
             if graph:
                 try:
                     import networkx as nx
                     import matplotlib.pyplot as plt
                     
-                    fig, ax = plt.subplots(figsize=(14, 10))
+                    # Options de visualisation
+                    col_viz1, col_viz2, col_viz3 = st.columns(3)
+                    
+                    with col_viz1:
+                        show_resources = st.checkbox(
+                            "Afficher ressources (DB2, IMS, MQ)",
+                            value=True,
+                            key="app_analyzer_show_resources"
+                        )
+                    
+                    with col_viz2:
+                        layout_type = st.selectbox(
+                            "Type de layout :",
+                            ["Spring", "Circular", "Kamada-Kawai", "Shell"],
+                            key="app_analyzer_layout_type"
+                        )
+                    
+                    with col_viz3:
+                        node_size = st.slider(
+                            "Taille des nœuds :",
+                            min_value=500,
+                            max_value=2000,
+                            value=1000,
+                            step=100,
+                            key="app_analyzer_node_size"
+                        )
+                    
+                    # Filtrer le graphe si nécessaire
+                    G_display = graph.copy()
+                    
+                    if not show_resources:
+                        # Supprimer les nœuds ressources
+                        nodes_to_remove = [
+                            n for n, d in G_display.nodes(data=True) 
+                            if d.get('type') in ['DB2_TABLE', 'IMS_SEGMENT', 'MQ_QUEUE']
+                        ]
+                        G_display.remove_nodes_from(nodes_to_remove)
+                    
+                    # Graphique principal
+                    fig, ax = plt.subplots(figsize=(18, 14))
                     fig.patch.set_facecolor('#1E1E2E')
                     ax.set_facecolor('#262636')
                     
-                    pos = nx.spring_layout(graph, k=2, iterations=50)
+                    # Choisir le layout
+                    if layout_type == "Spring":
+                        pos = nx.spring_layout(G_display, k=3, iterations=50, seed=42)
+                    elif layout_type == "Circular":
+                        pos = nx.circular_layout(G_display)
+                    elif layout_type == "Kamada-Kawai":
+                        pos = nx.kamada_kawai_layout(G_display)
+                    else:  # Shell
+                        pos = nx.shell_layout(G_display)
                     
-                    # Dessiner le graphe
-                    nx.draw_networkx_nodes(graph, pos, node_color='#4EA3FF', node_size=1500, ax=ax)
-                    nx.draw_networkx_labels(graph, pos, font_size=8, font_color='white', ax=ax)
-                    nx.draw_networkx_edges(graph, pos, edge_color='#00D9A5', arrows=True, 
-                                          arrowsize=20, width=2, ax=ax)
+                    # Couleurs par type de nœud
+                    node_colors = []
+                    node_shapes = []
                     
-                    ax.set_title('Graphe de Dépendances', color='white', fontsize=16, pad=20)
+                    for node in G_display.nodes():
+                        node_data = G_display.nodes[node]
+                        node_type = node_data.get('type', 'PROGRAM')
+                        
+                        if node_type == 'DB2_TABLE':
+                            node_colors.append('#FFB020')  # Orange
+                        elif node_type == 'IMS_SEGMENT':
+                            node_colors.append('#FF6B9D')  # Rose
+                        elif node_type == 'MQ_QUEUE':
+                            node_colors.append('#A3FFD6')  # Cyan
+                        else:  # PROGRAM
+                            component_type = node_data.get('component_type', '')
+                            is_critical = node_data.get('is_critical', False)
+                            is_orphan = node_data.get('is_orphan', False)
+                            
+                            if is_orphan:
+                                node_colors.append('#FF4757')  # Rouge (orphelin)
+                            elif is_critical:
+                                node_colors.append('#FF6B00')  # Orange foncé (critique)
+                            elif 'CICS' in component_type:
+                                node_colors.append('#00D9A5')  # Vert
+                            elif 'IMS' in component_type:
+                                node_colors.append('#FFB020')  # Orange
+                            elif 'DB2' in component_type:
+                                node_colors.append('#9D4EFF')  # Violet
+                            else:
+                                node_colors.append('#4EA3FF')  # Bleu (Batch)
+                    
+                    # Dessiner les nœuds
+                    nx.draw_networkx_nodes(
+                        G_display, pos, 
+                        node_color=node_colors, 
+                        node_size=node_size, 
+                        ax=ax, 
+                        alpha=0.9,
+                        edgecolors='white',
+                        linewidths=2
+                    )
+                    
+                    # Labels
+                    nx.draw_networkx_labels(
+                        G_display, pos, 
+                        font_size=7, 
+                        font_color='white', 
+                        ax=ax,
+                        font_weight='bold'
+                    )
+                    
+                    # Arêtes avec couleurs par type
+                    edge_colors = []
+                    for u, v, d in G_display.edges(data=True):
+                        edge_type = d.get('type', 'CALL')
+                        if edge_type == 'DB2_ACCESS':
+                            edge_colors.append('#FFB020')
+                        elif edge_type == 'IMS_ACCESS':
+                            edge_colors.append('#FF6B9D')
+                        elif edge_type == 'MQ_ACCESS':
+                            edge_colors.append('#A3FFD6')
+                        else:
+                            edge_colors.append('#00D9A5')
+                    
+                    nx.draw_networkx_edges(
+                        G_display, pos, 
+                        edge_color=edge_colors, 
+                        arrows=True,
+                        arrowsize=20, 
+                        width=2, 
+                        ax=ax, 
+                        alpha=0.6,
+                        arrowstyle='-|>',
+                        connectionstyle='arc3,rad=0.1'
+                    )
+                    
+                    ax.set_title('Graphe de Dépendances - Application Mainframe', 
+                                color='white', fontsize=18, pad=25, fontweight='bold')
                     ax.axis('off')
                     
                     plt.tight_layout()
                     st.pyplot(fig)
                     
+                    # Légende détaillée
+                    st.markdown("---")
+                    st.markdown("**🎨 Légende des couleurs :**")
+                    
+                    col_leg1, col_leg2, col_leg3, col_leg4 = st.columns(4)
+                    
+                    with col_leg1:
+                        st.markdown("**Programmes :**")
+                        st.markdown("🔵 Batch (COBOL)")
+                        st.markdown("🟢 CICS transactionnel")
+                        st.markdown("🟣 DB2 embedded")
+                        st.markdown("🟠 IMS DL/I")
+                    
+                    with col_leg2:
+                        st.markdown("**États spéciaux :**")
+                        st.markdown("🔴 Orphelin (non utilisé)")
+                        st.markdown("🟧 Critique (central)")
+                        st.markdown("⚪ Standard")
+                    
+                    with col_leg3:
+                        st.markdown("**Ressources :**")
+                        st.markdown("🟠 Table DB2")
+                        st.markdown("🔴 Segment IMS")
+                        st.markdown("🟢 Queue MQ")
+                    
+                    with col_leg4:
+                        st.markdown("**Arêtes :**")
+                        st.markdown("🟢 Appel programme (CALL)")
+                        st.markdown("🟠 Accès DB2 (SQL)")
+                        st.markdown("🔴 Accès IMS (DL/I)")
+                        st.markdown("🟢 Accès MQ")
+                    
                     # Statistiques du graphe
                     st.markdown("---")
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Noeuds", graph.number_of_nodes())
-                    col2.metric("Arêtes", graph.number_of_edges())
+                    st.markdown("**📊 Statistiques du graphe :**")
+                    
+                    col_stats1, col_stats2, col_stats3, col_stats4 = st.columns(4)
+                    
+                    col_stats1.metric("Nœuds totaux", graph.number_of_nodes())
+                    col_stats2.metric("Arêtes totales", graph.number_of_edges())
+                    
+                    # Densité
+                    try:
+                        density = nx.density(graph)
+                        col_stats3.metric("Densité", f"{density:.3f}")
+                    except:
+                        col_stats3.metric("Densité", "N/A")
+                    
+                    # Cycles
+                    col_stats4.metric(
+                        "Cycles détectés", 
+                        len(cycles),
+                        delta="⚠️ À résoudre" if len(cycles) > 0 else "✅ Aucun",
+                        delta_color="inverse" if len(cycles) > 0 else "off"
+                    )
+                    
+                    # Détails des cycles
+                    if cycles:
+                        st.markdown("---")
+                        st.markdown("**🔄 Dépendances circulaires détectées :**")
+                        
+                        with st.expander(f"Voir les {len(cycles)} cycle(s)"):
+                            for i, cycle in enumerate(cycles[:10], 1):
+                                cycle_str = " → ".join(cycle) + f" → {cycle[0]}"
+                                st.markdown(f"**Cycle {i} :** `{cycle_str}`")
+                            
+                            if len(cycles) > 10:
+                                st.caption(f"... et {len(cycles) - 10} autres cycles")
+                    
+                    # Export du graphe
+                    st.markdown("---")
                     
                     try:
-                        cycles = list(nx.simple_cycles(graph))
-                        col3.metric("Cycles détectés", len(cycles), delta="⚠️" if cycles else "✅")
+                        # Export Graphviz .dot
+                        from networkx.drawing.nx_pydot import write_dot
+                        
+                        dot_buffer = io.StringIO()
+                        write_dot(graph, dot_buffer)
+                        dot_content = dot_buffer.getvalue()
+                        
+                        st.download_button(
+                            "📥 Télécharger graphe (.dot)",
+                            data=dot_content,
+                            file_name=f"dependency_graph_{datetime.now().strftime('%Y%m%d_%H%M%S')}.dot",
+                            key="app_analyzer_download_dot"
+                        )
                     except:
-                        col3.metric("Cycles", "N/A")
+                        st.info("💡 Installez pydot pour l'export Graphviz : `pip install pydot`")
                 
-                except ImportError:
-                    st.error("❌ Installez networkx et matplotlib")
+                except ImportError as e:
+                    st.error(f"❌ Bibliothèques manquantes : {e}")
+                    st.info("💡 Installez : `pip install networkx matplotlib`")
             else:
-                st.info("Graphe non généré")
+                st.info("Graphe non généré. Activez l'option 'Graphe complet' lors de l'analyse.")
             
             st.markdown('</div>', unsafe_allow_html=True)
 
-        # Exports finaux
-        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.subheader("💾 " + T("Exports & Rapports", "Exports & Reports"))
-        
-        col1, col2, col3 = st.columns(3)
-        
-        # Export JSON
-        with col1:
-            json_data = json.dumps(report_json, indent=2, ensure_ascii=False)
-            st.download_button(
-                "📄 Rapport JSON",
-                data=json_data.encode('utf-8'),
-                file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json",
-                use_container_width=True,
-                key="analyzer_download_json"
-            )
-        
-        # Export Markdown
-        with col2:
-            markdown_report = f"""# Rapport d'Analyse Mainframe
+        # ========== TAB 4 : RECHERCHE D'IMPACT ==========
+        with tab4:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("🔍 Analyse d'Impact - Recherche de Dépendances")
+            
+            st.markdown("""
+            **Outil d'aide à la décision :** Identifiez tous les composants impactés par la modification d'un programme.
+            
+            Utilisez cet outil avant :
+            - Modification d'un programme
+            - Suppression d'un module
+            - Refactoring
+            - Migration vers une nouvelle architecture
+            """)
+            
+            st.markdown("---")
+            
+            col_search1, col_search2 = st.columns([3, 1])
+            
+            with col_search1:
+                program_to_analyze = st.selectbox(
+                    "🎯 Sélectionnez le programme à analyser :",
+                    options=sorted(analyzer.programs.keys()),
+                    key="app_analyzer_impact_program_select"
+                )
+            
+            with col_search2:
+                st.markdown("<br>", unsafe_allow_html=True)
+                search_impact_button = st.button(
+                    "🔍 Analyser Impact",
+                    use_container_width=True,
+                    key="app_analyzer_search_impact_btn"
+                )
+            
+            if search_impact_button and program_to_analyze:
+                
+                with st.spinner("🔍 Analyse en cours..."):
+                    impact_result = analyzer.search_impact(program_to_analyze)
+                
+                if 'error' in impact_result:
+                    st.error(f"❌ {impact_result['error']}")
+                else:
+                    # Résumé de l'impact
+                    risk_color = {
+                        'HIGH': '#FF4757',
+                        'MEDIUM': '#FFB020',
+                        'LOW': '#00D9A5'
+                    }.get(impact_result['risk_assessment'], '#4EA3FF')
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, rgba(78, 163, 255, 0.1), rgba(0, 212, 255, 0.1));
+                        border-left: 4px solid {risk_color};
+                        padding: 1.5rem;
+                        border-radius: 8px;
+                        margin: 1rem 0;
+                    ">
+                        <h3 style="color: white; margin: 0 0 1rem 0;">📊 Résultat de l'Analyse d'Impact</h3>
+                        <p style="color: white; margin: 0.5rem 0;">
+                            <strong>Programme analysé :</strong> {impact_result['modified_program']}<br>
+                            <strong>Niveau de risque :</strong> <span style="color: {risk_color}; font-weight: bold;">{impact_result['risk_assessment']}</span><br>
+                            <strong>Composants impactés :</strong> {impact_result['impact_count']}<br>
+                            <strong>Impact direct :</strong> {len(impact_result['direct_impact'])} composant(s)
+                        </p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Détails du programme source
+                    st.markdown("---")
+                    st.markdown("**📋 Détails du programme source :**")
+                    
+                    prog_meta = analyzer.programs.get(program_to_analyze)
+                    if prog_meta:
+                        col_detail1, col_detail2, col_detail3, col_detail4 = st.columns(4)
+                        
+                        col_detail1.metric("Type", prog_meta.component_type.value.replace('COBOL_', ''))
+                        col_detail2.metric("Lignes", prog_meta.lines)
+                        col_detail3.metric("Complexité", prog_meta.complexity_score)
+                        col_detail4.metric("Risque", prog_meta.risk_level)
+                        
+                        col_detail5, col_detail6, col_detail7, col_detail8 = st.columns(4)
+                        col_detail5.metric("Appels émis", len(prog_meta.calls_to))
+                        col_detail6.metric("Appelé par", len(prog_meta.called_by))
+                        col_detail7.metric("CICS", len(prog_meta.calls_cics))
+                        col_detail8.metric("DB2", len(prog_meta.db2_tables))
+                    
+                    # Impact direct
+                    st.markdown("---")
+                    st.markdown("**🔴 Impact Direct (appelants immédiats) :**")
+                    
+                    if impact_result['direct_impact']:
+                        for caller in sorted(impact_result['direct_impact']):
+                            if caller in analyzer.programs:
+                                caller_meta = analyzer.programs[caller]
+                                st.markdown(
+                                    f"- 🔴 **{caller}** "
+                                    f"({caller_meta.component_type.value.replace('COBOL_', '')}) "
+                                    f"- Complexité: {caller_meta.complexity_score} "
+                                    f"- Risque: {caller_meta.risk_level}"
+                                )
+                            else:
+                                st.markdown(f"- 🔴 **{caller}** (JCL ou externe)")
+                    else:
+                        st.success("✅ Aucun impact direct détecté")
+                    
+                    # Impact total (récursif)
+                    st.markdown("---")
+                    st.markdown("**🟠 Impact Total (récursif - tous les niveaux) :**")
+                    
+                    if impact_result['total_impacted']:
+                        # Grouper par niveau de risque
+                        impacted_by_risk = {'HIGH': [], 'MEDIUM': [], 'LOW': [], 'UNKNOWN': []}
+                        
+                        for prog in impact_result['total_impacted']:
+                            if prog in analyzer.programs:
+                                prog_meta = analyzer.programs[prog]
+                                impacted_by_risk[prog_meta.risk_level].append(prog)
+                            else:
+                                impacted_by_risk['UNKNOWN'].append(prog)
+                        
+                        # Afficher par niveau de risque
+                        if impacted_by_risk['HIGH']:
+                            st.markdown("**⚠️ Risque ÉLEVÉ :**")
+                            for prog in sorted(impacted_by_risk['HIGH']):
+                                prog_meta = analyzer.programs[prog]
+                                st.markdown(
+                                    f"- 🔥 **{prog}** "
+                                    f"({prog_meta.component_type.value.replace('COBOL_', '')}) "
+                                    f"- Complexité: {prog_meta.complexity_score}"
+                                )
+                        
+                        if impacted_by_risk['MEDIUM']:
+                            with st.expander(f"⚠️ Risque MOYEN ({len(impacted_by_risk['MEDIUM'])})"):
+                                for prog in sorted(impacted_by_risk['MEDIUM']):
+                                    prog_meta = analyzer.programs[prog]
+                                    st.markdown(f"- 🟠 {prog} ({prog_meta.component_type.value.replace('COBOL_', '')})")
+                        
+                        if impacted_by_risk['LOW']:
+                            with st.expander(f"✅ Risque FAIBLE ({len(impacted_by_risk['LOW'])})"):
+                                for prog in sorted(impacted_by_risk['LOW']):
+                                    prog_meta = analyzer.programs[prog]
+                                    st.markdown(f"- 🟢 {prog} ({prog_meta.component_type.value.replace('COBOL_', '')})")
+                        
+                        if impacted_by_risk['UNKNOWN']:
+                            with st.expander(f"❓ Composants externes ({len(impacted_by_risk['UNKNOWN'])})"):
+                                for prog in sorted(impacted_by_risk['UNKNOWN']):
+                                    st.markdown(f"- ⚪ {prog}")
+                    else:
+                        st.success("✅ Aucun impact récursif détecté")
+                    
+                    # Recommandations
+                    st.markdown("---")
+                    st.markdown("**💡 Recommandations :**")
+                    
+                    if impact_result['risk_assessment'] == 'HIGH':
+                        st.markdown("""
+                        <div class="error-box">
+                            ⚠️ <strong>RISQUE ÉLEVÉ</strong><br>
+                            • Planifier une analyse détaillée avant modification<br>
+                            • Coordonner avec les équipes impactées<br>
+                            • Prévoir des tests complets sur tous les composants<br>
+                            • Documenter tous les changements<br>
+                            • Envisager une mise en production progressive
+                        </div>
+                        """, unsafe_allow_html=True)
+                    elif impact_result['risk_assessment'] == 'MEDIUM':
+                        st.markdown("""
+                        <div class="warning-box">
+                            ⚠️ <strong>RISQUE MOYEN</strong><br>
+                            • Tester les composants impactés directs<br>
+                            • Informer les équipes concernées<br>
+                            • Prévoir des tests de non-régression
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.markdown("""
+                        <div class="success-box">
+                            ✅ <strong>RISQUE FAIBLE</strong><br>
+                            • Impact limité, modification possible<br>
+                            • Tests standards recommandés
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Export de l'analyse
+                    st.markdown("---")
+                    
+                    impact_report = f"""# Rapport d'Analyse d'Impact
 
+**Programme analysé :** {impact_result['modified_program']}
 **Date :** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Niveau de risque :** {impact_result['risk_assessment']}
 
-## Résumé Exécutif
+## Résumé
 
-- **Programmes analysés :** {metrics['total_programs']}
-- **Steps JCL :** {metrics['total_jcl_steps']}
-- **Datasets :** {metrics['total_datasets']}
-- **Lignes de code :** {metrics['total_lines']:,}
-- **Complexité moyenne :** {metrics['avg_complexity']}
+- **Impact direct :** {len(impact_result['direct_impact'])} composant(s)
+- **Impact total :** {impact_result['impact_count']} composant(s)
 
-## Programmes COBOL
+## Impact Direct
 
-| Nom | Lignes | Complexité | I/O Ops |
-|-----|--------|------------|---------|
-{"".join([f"| {p.name} | {p.lines} | {p.complexity} | {p.io_operations} |\n" for p in analyzer.programs.values()])}
+{chr(10).join([f"- {c}" for c in impact_result['direct_impact']])}
 
-## Datasets
+## Impact Total (récursif)
 
-{"".join([f"- **{d.name}** ({d.type})\n" for d in analyzer.datasets.values()])}
+{chr(10).join([f"- {c}" for c in sorted(impact_result['total_impacted'])])}
 
 ## Recommandations
 
-- Programmes avec complexité > 15 nécessitent une revue
-- Datasets partagés : attention aux accès concurrents
-- Documenter les dépendances critiques
+{'RISQUE ÉLEVÉ - Analyse détaillée requise' if impact_result['risk_assessment'] == 'HIGH' else 'Tests standards recommandés'}
 
 ---
 *Généré par Application Analyzer*
 """
-            st.download_button(
-                "📝 Rapport Markdown",
-                data=markdown_report.encode('utf-8'),
-                file_name=f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-                use_container_width=True,
-                key="analyzer_download_md"
-            )
-        
-        # Export ZIP complet
-        with col3:
-            try:
-                zip_buf = io.BytesIO()
-                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    # JSON
-                    zipf.writestr("report.json", json_data)
                     
-                    # Markdown
-                    zipf.writestr("summary_FR.md", markdown_report)
-                    
-                    # Metrics CSV
-                    if not df_programs.empty:
-                        csv_content = df_programs.to_csv(index=False, sep=';')
-                        zipf.writestr("metrics.csv", csv_content)
+                    st.download_button(
+                        "📥 Télécharger rapport d'impact (Markdown)",
+                        data=impact_report.encode('utf-8'),
+                        file_name=f"impact_analysis_{program_to_analyze}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                        key="app_analyzer_download_impact_report"
+                    )
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ========== TAB 5 : ALERTES & RISQUES ==========
+        with tab5:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("⚠️ Alertes, Risques et Recommandations")
+            
+            # Résumé des alertes
+            total_alerts = stats['orphan_programs'] + stats['critical_programs'] + stats['high_risk_programs'] + len(cycles)
+            
+            if total_alerts > 0:
+                st.markdown(f"""
+                <div class="error-box">
+                    🚨 <strong>{total_alerts} alerte(s) détectée(s) nécessitant une attention</strong>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div class="success-box">
+                    ✅ <strong>Aucune alerte critique détectée</strong><br>
+                    L'application respecte les bonnes pratiques de développement.
+                </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Alerte 1 : Programmes orphelins
+            orphans = [p for p in analyzer.programs.values() if p.is_orphan]
+            
+            if orphans:
+                st.markdown(f"""
+                <div class="warning-box">
+                    🚫 <strong>{len(orphans)} programme(s) orphelin(s) détecté(s)</strong><br>
+                    Ces programmes ne sont appelés par aucun autre composant et peuvent probablement être supprimés.
+                </div>
+                """, unsafe_allow_html=True)
                 
-                zip_buf.seek(0)
+                with st.expander(f"📋 Voir les {len(orphans)} orphelins"):
+                    df_orphans = pd.DataFrame([
+                        {
+                            'Programme': p.name,
+                            'Type': p.component_type.value.replace('COBOL_', ''),
+                            'Lignes': p.lines,
+                            'Dernière utilisation': 'Jamais',
+                            'Action recommandée': 'Archiver ou supprimer'
+                        }
+                        for p in orphans
+                    ])
+                    
+                    st.dataframe(df_orphans, use_container_width=True)
+                    
+                    csv_orphans = df_orphans.to_csv(index=False, sep=';')
+                    st.download_button(
+                        "📥 Exporter liste des orphelins (CSV)",
+                        data=csv_orphans.encode('utf-8'),
+                        file_name=f"orphan_programs_{datetime.now().strftime('%Y%m%d')}.csv",
+                        key="app_analyzer_download_orphans"
+                    )
+            else:
+                st.success("✅ Aucun programme orphelin détecté")
+            
+            st.markdown("---")
+            
+            # Alerte 2 : Programmes critiques
+            criticals = [p for p in analyzer.programs.values() if p.is_critical]
+            
+            if criticals:
+                st.markdown(f"""
+                <div class="error-box">
+                    ⚠️ <strong>{len(criticals)} programme(s) critique(s) identifié(s)</strong><br>
+                    Ces programmes sont au centre de nombreuses dépendances. Toute modification peut avoir un impact majeur.
+                </div>
+                """, unsafe_allow_html=True)
+                
+                with st.expander(f"🔥 Voir les {len(criticals)} programmes critiques"):
+                    df_criticals = pd.DataFrame([
+                        {
+                            'Programme': p.name,
+                            'Type': p.component_type.value.replace('COBOL_', ''),
+                            'Appelé par': len(p.called_by),
+                            'Appelle': len(p.calls_to),
+                            'Complexité': p.complexity_score,
+                            'Risque': p.risk_level,
+                            'Recommandation': 'Tests complets requis avant modification'
+                        }
+                        for p in sorted(criticals, key=lambda x: len(x.called_by), reverse=True)
+                    ])
+                    
+                    st.dataframe(df_criticals, use_container_width=True)
+            else:
+                st.success("✅ Aucun programme critique identifié")
+            
+            st.markdown("---")
+            
+            # Alerte 3 : Haute complexité
+            high_complexity = [p for p in analyzer.programs.values() if p.risk_level == 'HIGH']
+            
+            if high_complexity:
+                st.markdown(f"""
+                <div class="error-box">
+                    🔥 <strong>{len(high_complexity)} programme(s) à haute complexité</strong><br>
+                    Ces programmes nécessitent un refactoring pour améliorer la maintenabilité.
+                </div>
+                """, unsafe_allow_html=True)
+                
+                with st.expander(f"📊 Voir les {len(high_complexity)} programmes complexes"):
+                    df_complex = pd.DataFrame([
+                        {
+                            'Programme': p.name,
+                            'Type': p.component_type.value.replace('COBOL_', ''),
+                            'Score complexité': p.complexity_score,
+                            'Lignes': p.lines,
+                            'Paragraphes': p.paragraphes,
+                            'Action': 'Refactoring recommandé'
+                        }
+                        for p in sorted(high_complexity, key=lambda x: x.complexity_score, reverse=True)
+                    ])
+                    
+                    st.dataframe(df_complex, use_container_width=True)
+            else:
+                st.success("✅ Complexité maîtrisée")
+            
+            st.markdown("---")
+            
+            # Alerte 4 : Cycles de dépendances
+            if cycles:
+                st.markdown(f"""
+                <div class="error-box">
+                    🔄 <strong>{len(cycles)} cycle(s) de dépendances détecté(s)</strong><br>
+                    Les dépendances circulaires compliquent la maintenance et augmentent les risques.
+                </div>
+                """, unsafe_allow_html=True)
+                
+                with st.expander(f"🔄 Voir les {len(cycles)} cycles"):
+                    for i, cycle in enumerate(cycles[:20], 1):
+                        cycle_str = " → ".join(cycle) + f" → {cycle[0]}"
+                        st.markdown(f"**Cycle {i} :** `{cycle_str}`")
+                        st.markdown("**Recommandation :** Refactorer pour supprimer la dépendance circulaire")
+                        st.markdown("---")
+                    
+                    if len(cycles) > 20:
+                        st.caption(f"... et {len(cycles) - 20} autres cycles")
+            else:
+                st.success("✅ Aucune dépendance circulaire")
+            
+            st.markdown("---")
+            
+            # Plan d'action global
+            st.markdown("**📋 Plan d'Action Recommandé :**")
+            
+            action_plan = []
+            
+            if orphans:
+                action_plan.append(f"1. **Nettoyer {len(orphans)} orphelins** → Gain: simplification du code, réduction maintenance")
+            
+            if criticals:
+                action_plan.append(f"2. **Documenter {len(criticals)} programmes critiques** → Risque: élevé en cas de modification")
+            
+            if high_complexity:
+                action_plan.append(f"3. **Refactorer {len(high_complexity)} programmes complexes** → Amélioration: maintenabilité")
+            
+            if cycles:
+                action_plan.append(f"4. **Résoudre {len(cycles)} cycles de dépendances** → Objectif: architecture propre")
+            
+            if action_plan:
+                for action in action_plan:
+                    st.markdown(action)
+            else:
+                st.info("✅ Aucune action prioritaire requise")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ========== TAB 6 : RAPPORTS ==========
+        with tab6:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📄 Génération de Rapports")
+            
+            st.markdown("""
+            Générez des rapports adaptés à différents publics :
+            - **Mode Métier** : Rapport simplifié pour non-techniciens
+            - **Mode Expert** : Rapport technique détaillé
+            """)
+            
+            col_report1, col_report2 = st.columns(2)
+            
+            # Rapport Métier
+            with col_report1:
+                st.markdown("### 📊 Rapport Métier (Non-Tech)")
+                
+                if st.button("Générer Rapport Métier", key="app_analyzer_gen_business_report", use_container_width=True):
+                    
+                    business_report = f"""# Rapport d'Analyse Application Mainframe
+## Vue Métier - Non Technique
+
+**Date :** {datetime.now().strftime('%d/%m/%Y à %H:%M')}
+**Analysé par :** Application Analyzer v2.0
+
+---
+
+## 📊 Résumé Exécutif
+
+Votre application Mainframe contient **{stats['total_programs']} programmes** répartis dans différentes catégories :
+
+- **{stats['cobol_batch']} programmes batch** : Traitements automatisés en arrière-plan
+- **{stats['cobol_cics']} programmes CICS** : Applications interactives pour les utilisateurs
+- **{stats['cobol_db2']} programmes DB2** : Accès aux bases de données
+- **{stats['cobol_ims']} programmes IMS** : Gestion de données hiérarchiques
+
+## 🎯 Points Clés
+
+### ✅ Points Positifs
+
+- Application structurée avec {stats['total_programs']} composants
+- {stats['total_copybooks']} bibliothèques partagées (réutilisabilité)
+- {stats['total_transactions']} transactions CICS opérationnelles
+
+### ⚠️ Points d'Attention
+
+{"- **" + str(stats['orphan_programs']) + " programmes inutilisés** → Peuvent être archivés pour simplifier la maintenance" if stats['orphan_programs'] > 0 else "- Tous les programmes sont utilisés ✅"}
+
+{"- **" + str(stats['critical_programs']) + " programmes critiques** → Nécessitent une attention particulière lors des modifications" if stats['critical_programs'] > 0 else "- Pas de programmes à forte dépendance ✅"}
+
+{"- **" + str(stats['high_risk_programs']) + " programmes complexes** → Difficiles à maintenir, refactoring recommandé" if stats['high_risk_programs'] > 0 else "- Complexité maîtrisée ✅"}
+
+## 📈 Indicateurs de Santé
+
+- **Taille du code** : {stats['total_lines']:,} lignes au total
+- **Complexité moyenne** : {stats['avg_complexity']:.1f} (Plus c'est bas, mieux c'est)
+- **Programmes orphelins** : {stats['orphan_programs']} sur {stats['total_programs']} ({stats['orphan_programs']/max(1,stats['total_programs'])*100:.1f}%)
+
+## 💡 Recommandations
+
+1. **Court terme (0-3 mois)**
+   - Archiver les {stats['orphan_programs']} programmes inutilisés
+   - Documenter les programmes critiques identifiés
+
+2. **Moyen terme (3-6 mois)**
+   - Refactorer les programmes à haute complexité
+   - Former les équipes sur les composants centraux
+
+3. **Long terme (6-12 mois)**
+   - Envisager la modernisation des programmes obsolètes
+   - Mettre en place des tests automatisés
+
+## 📞 Contact
+
+Pour toute question sur ce rapport, contactez l'équipe technique.
+
+---
+*Rapport généré automatiquement par Application Analyzer*
+"""
+                    
+                    st.download_button(
+                        "📥 Télécharger Rapport Métier (Markdown)",
+                        data=business_report.encode('utf-8'),
+                        file_name=f"rapport_metier_{datetime.now().strftime('%Y%m%d')}.md",
+                        key="app_analyzer_download_business_report"
+                    )
+                    
+                    with st.expander("👁️ Aperçu du rapport"):
+                        st.markdown(business_report)
+            
+            # Rapport Technique
+            with col_report2:
+                st.markdown("### 🔧 Rapport Technique (Expert)")
+                
+                if st.button("Générer Rapport Technique", key="app_analyzer_gen_tech_report", use_container_width=True):
+                    
+                    tech_report = f"""# Rapport Technique - Analyse Application Mainframe
+
+**Date :** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+**Outil :** Application Analyzer v2.0 (Reverse Engineering)
+
+---
+
+## 1. Statistiques Globales
+
+### 1.1 Inventaire Composants
+
+| Catégorie | Nombre |
+|-----------|--------|
+| Programmes COBOL total | {stats['total_programs']} |
+| - Batch | {stats['cobol_batch']} |
+| - CICS | {stats['cobol_cics']} |
+| - IMS | {stats['cobol_ims']} |
+| - DB2 | {stats['cobol_db2']} |
+| - Hybrid | {stats['cobol_hybrid']} |
+| Jobs JCL | {stats['total_jcl']} |
+| Copybooks | {stats['total_copybooks']} |
+
+### 1.2 Ressources Mainframe
+
+| Ressource | Nombre |
+|-----------|--------|
+| Transactions CICS | {stats['total_transactions']} |
+| BMS Maps | {stats['total_bms_maps']} |
+| Tables DB2 | {stats['total_db2_tables']} |
+| Segments IMS | {stats['total_ims_segments']} |
+| Queues MQ | {stats['total_mq_queues']} |
+
+### 1.3 Métriques Code
+
+- **Lignes totales** : {stats['total_lines']:,}
+- **Complexité moyenne** : {stats['avg_complexity']:.2f}
+- **Programmes orphelins** : {stats['orphan_programs']}
+- **Programmes critiques** : {stats['critical_programs']}
+- **Haute complexité** : {stats['high_risk_programs']}
+
+## 2. Analyse de Dépendances
+
+### 2.1 Graphe d'Appels
+
+- **Nœuds** : {graph.number_of_nodes() if graph else 'N/A'}
+- **Arêtes** : {graph.number_of_edges() if graph else 'N/A'}
+- **Densité** : {nx.density(graph):.3f if graph else 'N/A'}
+- **Cycles détectés** : {len(cycles)}
+
+### 2.2 Appels Détectés
+
+- **CALL statiques** : {sum(len(p.calls_static) for p in analyzer.programs.values())}
+- **CALL dynamiques** : {sum(len(p.calls_dynamic) for p in analyzer.programs.values())}
+- **CICS LINK/XCTL** : {sum(len(p.calls_cics) for p in analyzer.programs.values())}
+- **IMS DL/I** : {sum(len(p.calls_ims) for p in analyzer.programs.values())}
+- **EXEC SQL** : {sum(len(p.calls_db2) for p in analyzer.programs.values())}
+- **MQ** : {sum(len(p.calls_mq) for p in analyzer.programs.values())}
+
+## 3. Points de Risque
+
+### 3.1 Programmes Orphelins
+
+{chr(10).join([f"- {p.name} ({p.lines} lignes, {p.component_type.value})" for p in list(analyzer.programs.values())[:10] if p.is_orphan])}
+
+### 3.2 Programmes Critiques (Forte Dépendance)
+
+{chr(10).join([f"- {p.name} (appelé par {len(p.called_by)}, appelle {len(p.calls_to)})" for p in sorted(analyzer.programs.values(), key=lambda x: len(x.called_by), reverse=True)[:10] if p.is_critical])}
+
+### 3.3 Haute Complexité
+
+{chr(10).join([f"- {p.name} (score: {p.complexity_score}, {p.lines} lignes)" for p in sorted(analyzer.programs.values(), key=lambda x: x.complexity_score, reverse=True)[:10] if p.risk_level == 'HIGH'])}
+
+## 4. Patterns Détectés
+
+### 4.1 CICS
+
+- Transactions : {stats['total_transactions']}
+- BMS Maps : {stats['total_bms_maps']}
+- LINK/XCTL : {sum(len(p.calls_cics) for p in analyzer.programs.values())}
+
+### 4.2 DB2
+
+- Tables accédées : {stats['total_db2_tables']}
+- Programmes DB2 : {stats['cobol_db2']}
+
+### 4.3 IMS
+
+- Segments : {stats['total_ims_segments']}
+- Programmes IMS : {stats['cobol_ims']}
+
+### 4.4 MQ
+
+- Queues : {stats['total_mq_queues']}
+
+## 5. Recommandations Techniques
+
+### 5.1 Immédiat
+
+1. Supprimer ou archiver les {stats['orphan_programs']} programmes orphelins
+2. Documenter les {stats['critical_programs']} programmes critiques
+3. Résoudre les {len(cycles)} cycles de dépendances
+
+### 5.2 Court Terme
+
+1. Refactorer les {stats['high_risk_programs']} programmes haute complexité
+2. Mettre en place des tests unitaires
+3. Établir une matrice de traçabilité
+
+### 5.3 Moyen/Long Terme
+
+1. Migration progressive vers architectures modernes
+2. API-fication des services réutilisables
+3. Modernisation UI (CICS → Web/API)
+
+## 6. Annexes
+
+### 6.1 Outils et Méthodes
+
+- **Parser** : Analyse statique regex avancée
+- **Graphe** : NetworkX (Python)
+- **Détection** : COBOL, CICS, IMS, DB2, MQ patterns
+
+### 6.2 Limites Connues
+
+- Parsing approximatif du COBOL libre
+- Macros JCL non supportées
+- DB2 embedded SQL partiellement analysé
+- CALL dynamiques : analyse heuristique
+
+---
+
+**Fin du rapport technique**
+
+*Généré par Application Analyzer - Reverse Engineering Mainframe*
+"""
+                    
+                    st.download_button(
+                        "📥 Télécharger Rapport Technique (Markdown)",
+                        data=tech_report.encode('utf-8'),
+                        file_name=f"rapport_technique_{datetime.now().strftime('%Y%m%d')}.md",
+                        key="app_analyzer_download_tech_report"
+                    )
+                    
+                    with st.expander("👁️ Aperçu du rapport"):
+                        st.markdown(tech_report)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ========== TAB 7 : EXPORTS ==========
+        with tab7:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("💾 Exports Multi-Formats")
+            
+            st.markdown("""
+            Exportez les résultats de l'analyse dans différents formats pour :
+            - Archivage et documentation
+            - Intégration dans d'autres outils
+            - Partage avec les équipes
+            """)
+            
+            col_export1, col_export2, col_export3 = st.columns(3)
+            
+            # Export 1 : JSON
+            with col_export1:
+                st.markdown("#### 📄 JSON (Machine-Readable)")
+                st.caption("Format pour intégration automatique")
+                
+                json_data = json.dumps(report_json, indent=2, ensure_ascii=False)
                 
                 st.download_button(
-                    "📦 ZIP Complet",
-                    data=zip_buf,
-                    file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                    mime="application/zip",
+                    "📥 Télécharger JSON",
+                    data=json_data.encode('utf-8'),
+                    file_name=f"mainframe_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
                     use_container_width=True,
-                    key="analyzer_download_zip"
+                    key="app_analyzer_download_json_final"
                 )
-            except Exception as e:
-                st.error(f"❌ Erreur création ZIP : {e}")
-        
-        st.markdown('</div>', unsafe_allow_html=True)        
+            
+            # Export 2 : Excel
+            with col_export2:
+                st.markdown("#### 📊 Excel Multi-Feuilles")
+                st.caption("Analyse complète dans Excel")
+                
+                try:
+                    excel_buf = io.BytesIO()
+                    with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
+                        # Feuille 1 : Programmes
+                        if not df_programs.empty:
+                            df_programs.to_excel(writer, index=False, sheet_name="Programmes")
+                        
+                        # Feuille 2 : Statistiques
+                        df_stats_export = pd.DataFrame(list(stats.items()), columns=['Indicateur', 'Valeur'])
+                        df_stats_export.to_excel(writer, index=False, sheet_name="Statistiques")
+                        
+                        # Feuille 3 : Ressources
+                        df_resources = pd.DataFrame({
+                            'Type': ['Transactions CICS', 'Tables DB2', 'Segments IMS', 'Queues MQ', 'BMS Maps'],
+                            'Nombre': [
+                                stats['total_transactions'],
+                                stats['total_db2_tables'],
+                                stats['total_ims_segments'],
+                                stats['total_mq_queues'],
+                                stats['total_bms_maps']
+                            ]
+                        })
+                        df_resources.to_excel(writer, index=False, sheet_name="Ressources")
+                        
+                        # Feuille 4 : Orphelins
+                        if orphans:
+                            df_orphans_export = pd.DataFrame([
+                                {'Programme': p.name, 'Type': p.component_type.value, 'Lignes': p.lines}
+                                for p in orphans
+                            ])
+                            df_orphans_export.to_excel(writer, index=False, sheet_name="Orphelins")
+                        
+                        # Feuille 5 : Critiques
+                        if criticals:
+                            df_criticals_export = pd.DataFrame([
+                                {
+                                    'Programme': p.name,
+                                    'Appelé_par': len(p.called_by),
+                                    'Appelle': len(p.calls_to),
+                                    'Complexité': p.complexity_score
+                                }
+                                for p in criticals
+                            ])
+                            df_criticals_export.to_excel(writer, index=False, sheet_name="Critiques")
+                    
+                    excel_buf.seek(0)
+                    
+                    st.download_button(
+                        "📥 Télécharger Excel",
+                        data=excel_buf,
+                        file_name=f"mainframe_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        key="app_analyzer_download_excel_final"
+                    )
+                except ImportError:
+                    st.info("💡 `pip install xlsxwriter`")
+            
+            # Export 3 : ZIP Complet
+            with col_export3:
+                st.markdown("#### 📦 ZIP Complet")
+                st.caption("Tous les rapports et exports")
+                
+                try:
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        # JSON
+                        zipf.writestr("analysis_report.json", json_data)
+                        
+                        # CSV programmes
+                        if not df_programs.empty:
+                            csv_programs = df_programs.to_csv(index=False, sep=';')
+                            zipf.writestr("programs_inventory.csv", csv_programs)
+                        
+                        # Markdown stats
+                        stats_md = f"""# Statistiques Application Mainframe
+
+                        {chr(10).join([f"- **{k}** : {v}" for k, v in stats.items()])}
+                        """
+                        zipf.writestr("statistics.md", stats_md)
+                        
+                        # Graphe .dot
+                        if graph:
+                            try:
+                                from networkx.drawing.nx_pydot import write_dot
+                                dot_buffer = io.StringIO()
+                                write_dot(graph, dot_buffer)
+                                zipf.writestr("dependency_graph.dot", dot_buffer.getvalue())
+                            except:
+                                pass
+                    
+                    zip_buf.seek(0)
+                    
+                    st.download_button(
+                        "📥 Télécharger ZIP",
+                        data=zip_buf,
+                        file_name=f"mainframe_complete_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                        mime="application/zip",
+                        use_container_width=True,
+                        key="app_analyzer_download_zip_final"
+                    )
+                except Exception as e:
+                    st.error(f"❌ Erreur ZIP : {e}")
+            
+            st.markdown("---")
+            
+            # Récapitulatif des exports
+            st.markdown("**📋 Formats disponibles :**")
+            
+            formats_table = pd.DataFrame({
+                'Format': ['JSON', 'Excel', 'CSV', 'Markdown', 'Graphviz .dot', 'ZIP'],
+                'Usage': [
+                    'Intégration automatique',
+                    'Analyse bureautique',
+                    'Import dans d\'autres outils',
+                    'Documentation',
+                    'Visualisation graphe',
+                    'Archive complète'
+                ],
+                'Disponible': ['✅', '✅', '✅', '✅', '✅' if graph else '❌', '✅']
+            })
+            
+            st.table(formats_table)
+            
+            st.markdown('</div>', unsafe_allow_html=True) 
+           
 # ===================== FOOTER PRO =====================
 st.markdown("""
 <div class="footer-pro">
