@@ -2845,6 +2845,7 @@ FIN DU DOCUMENT
         
         st.markdown('</div>', unsafe_allow_html=True)
 # ===================== MODE 7 : APPLICATION ANALYZER =====================
+# ===================== MODE 7 : APPLICATION ANALYZER =====================
 elif mode == TXT["modes"][6]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("🔍 " + T(
@@ -2857,60 +2858,121 @@ elif mode == TXT["modes"][6]:
     <div class="info-box">
         🎯 <strong>Analyse complète de code Mainframe</strong><br>
         Analysez automatiquement vos applications legacy :<br>
-        • ✅ Parse COBOL, JCL, Copybooks<br>
+        • ✅ Parse COBOL, JCL, Copybooks depuis un ZIP<br>
         • ✅ Extrait dépendances et datasets<br>
         • ✅ Calcule métriques et complexité<br>
         • ✅ Génère graphe de dépendances<br>
         • ✅ Rapport JSON + Markdown + Excel<br>
         • ✅ Export ZIP complet<br>
         <br>
-        <strong>Formats supportés :</strong> .cbl, .cob, .jcl, .txt, .cpy
+        <strong>Format attendu :</strong> Fichier ZIP contenant .cbl, .cob, .jcl, .txt, .cpy
     </div>
     """, unsafe_allow_html=True)
 
-    # Upload multiple files
+    # Upload ZIP unique
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("📂 " + T("Chargement des sources", "Source Upload"))
+    st.subheader("📂 " + T("Chargement du ZIP source", "Source ZIP Upload"))
     
-    uploaded_sources = st.file_uploader(
-        "📦 " + T("Fichiers sources (COBOL, JCL, COPY)", "Source files (COBOL, JCL, COPY)"),
-        type=["cbl", "cob", "jcl", "txt", "cpy"],
-        accept_multiple_files=True,
-        help=T("Sélectionnez tous les fichiers à analyser", "Select all files to analyze"),
-        key="analyzer_file_uploader"
+    uploaded_zip = st.file_uploader(
+        "📦 " + T("Fichier ZIP (COBOL, JCL, COPY)", "ZIP file (COBOL, JCL, COPY)"),
+        type=["zip"],
+        help=T(
+            "Sélectionnez un fichier ZIP contenant tous vos sources mainframe",
+            "Select a ZIP file containing all your mainframe sources"
+        ),
+        key="analyzer_zip_uploader"
     )
     
-    if uploaded_sources:
+    if uploaded_zip:
         st.markdown(f"""
         <div class="success-box">
-            ✅ <strong>{len(uploaded_sources)} fichier(s) chargé(s)</strong>
+            ✅ <strong>ZIP chargé : {uploaded_zip.name}</strong>
         </div>
         """, unsafe_allow_html=True)
         
-        # Stockage des fichiers
-        st.session_state.analyzer_uploaded_files = [
-            (f.name, f.read()) for f in uploaded_sources
-        ]
+        # Extraction et lecture du ZIP
+        try:
+            with zipfile.ZipFile(uploaded_zip, "r") as zip_ref:
+                file_list = zip_ref.namelist()
+                
+                # Filtrer les fichiers valides
+                valid_files = []
+                for filename in file_list:
+                    # Ignorer les dossiers, fichiers système et __MACOSX
+                    if filename.endswith('/') or filename.startswith('__MACOSX') or filename.startswith('.'):
+                        continue
+                    
+                    # Vérifier les extensions supportées
+                    if any(filename.lower().endswith(ext) for ext in ['.cbl', '.cob', '.jcl', '.txt', '.cpy', '.copy']):
+                        try:
+                            content = zip_ref.read(filename)
+                            valid_files.append((filename, content))
+                        except Exception as e:
+                            st.warning(f"⚠️ Impossible de lire {filename}: {e}")
+                            continue
+                
+                # Stocker dans session_state
+                st.session_state.analyzer_uploaded_files = valid_files
+                
+                if valid_files:
+                    st.markdown(f"""
+                    <div class="success-box">
+                        ✅ <strong>{len(valid_files)} fichier(s) extrait(s) du ZIP</strong>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Aperçu des fichiers avec structure arborescente
+                    st.markdown("**📋 Structure du projet détectée :**")
+                    
+                    # Organiser par type
+                    file_types = defaultdict(list)
+                    for fname, _ in valid_files:
+                        basename = fname.split('/')[-1]  # Nom du fichier sans chemin
+                        if basename.lower().endswith(('.cbl', '.cob')):
+                            file_types['COBOL'].append(basename)
+                        elif basename.lower().endswith('.jcl'):
+                            file_types['JCL'].append(basename)
+                        elif basename.lower().endswith(('.cpy', '.copy')):
+                            file_types['COPYBOOK'].append(basename)
+                        else:
+                            file_types['AUTRE'].append(basename)
+                    
+                    # Affichage des métriques
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("📘 COBOL", len(file_types.get('COBOL', [])))
+                    col2.metric("🔧 JCL", len(file_types.get('JCL', [])))
+                    col3.metric("📖 COPYBOOK", len(file_types.get('COPYBOOK', [])))
+                    col4.metric("📄 AUTRE", len(file_types.get('AUTRE', [])))
+                    
+                    # Affichage détaillé dans un expander
+                    with st.expander("🔍 Voir le détail des fichiers"):
+                        for ftype, files in file_types.items():
+                            if files:
+                                st.markdown(f"**{ftype} ({len(files)}) :**")
+                                for f in sorted(files)[:20]:  # Limiter à 20 pour l'affichage
+                                    st.text(f"  • {f}")
+                                if len(files) > 20:
+                                    st.caption(f"... et {len(files) - 20} autres fichiers")
+                                st.markdown("---")
+                else:
+                    st.markdown("""
+                    <div class="warning-box">
+                        ⚠️ Aucun fichier valide trouvé dans le ZIP<br>
+                        Formats supportés : .cbl, .cob, .jcl, .txt, .cpy, .copy
+                    </div>
+                    """, unsafe_allow_html=True)
         
-        # Aperçu des fichiers
-        st.markdown("**📋 Fichiers détectés :**")
+        except zipfile.BadZipFile:
+            st.markdown("""
+            <div class="error-box">
+                ❌ Le fichier uploadé n'est pas un ZIP valide
+            </div>
+            """, unsafe_allow_html=True)
         
-        file_types = defaultdict(int)
-        for fname, _ in st.session_state.analyzer_uploaded_files:
-            if fname.endswith(('.cbl', '.cob')):
-                file_types['COBOL'] += 1
-            elif fname.endswith('.jcl'):
-                file_types['JCL'] += 1
-            elif fname.endswith('.cpy'):
-                file_types['COPYBOOK'] += 1
-            else:
-                file_types['AUTRE'] += 1
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("📘 COBOL", file_types.get('COBOL', 0))
-        col2.metric("🔧 JCL", file_types.get('JCL', 0))
-        col3.metric("📖 COPYBOOK", file_types.get('COPYBOOK', 0))
-        col4.metric("📄 AUTRE", file_types.get('AUTRE', 0))
+        except Exception as e:
+            st.error(f"❌ Erreur lors de l'extraction du ZIP : {e}")
+            import traceback
+            st.code(traceback.format_exc(), language="python")
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -2943,10 +3005,37 @@ elif mode == TXT["modes"][6]:
     
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # Bouton d'analyse
+    # Informations sur la structure ZIP attendue
+    with st.expander("ℹ️ Structure ZIP recommandée"):
+        st.markdown("""
+        ```
+        mon_projet.zip
+        ├── src/
+        │   ├── BK01LOAD.cbl
+        │   ├── BK02ORDR.cbl
+        │   └── BK03STCK.cob
+        ├── copybooks/
+        │   ├── CUSTOMER.cpy
+        │   └── ORDERS.copy
+        ├── jcl/
+        │   ├── BOOKMAST.jcl
+        │   └── RUNBOOKS.txt
+        └── data/
+            └── sample.txt
+        ```
+        
+        **Note :** La structure interne du ZIP est flexible. Les fichiers peuvent être :
+        - À la racine du ZIP
+        - Dans des sous-dossiers (src/, jcl/, etc.)
+        - Mélangés dans n'importe quelle structure
+        
+        L'analyseur détecte automatiquement les fichiers par extension.
+        """)
+
+    # Bouton d'analyse (reste identique)
     analyze_button = st.button(
         "🚀 " + T("LANCER ANALYSE", "START ANALYSIS"),
-        disabled=not uploaded_sources,
+        disabled=not uploaded_zip or not st.session_state.analyzer_uploaded_files,
         use_container_width=True,
         key="analyzer_analyze_btn"
     )
@@ -2981,6 +3070,9 @@ elif mode == TXT["modes"][6]:
                 st.error(f"❌ Erreur lors de l'analyse : {e}")
                 import traceback
                 st.code(traceback.format_exc(), language="python")
+
+    # Le reste du code (affichage des résultats) reste identique...
+    # [Garder tous les TABs et exports comme avant]
 
     # Affichage des résultats (persistant)
     if st.session_state.analyzer_results:
