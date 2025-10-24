@@ -109,10 +109,11 @@ if 'analyzer_uploaded_files' not in st.session_state:
     st.session_state.analyzer_uploaded_files = []
 if 'analyzer_dependency_graph' not in st.session_state:
     st.session_state.analyzer_dependency_graph = None
-if 'analyzer_metrics' not in st.session_state:
-    st.session_state.analyzer_metrics = None
-if 'analyzer_report_json' not in st.session_state:
-    st.session_state.analyzer_report_json = None    
+# ✅ APRÈS
+if 'analyzer_computed_metrics' not in st.session_state:
+    st.session_state.analyzer_computed_metrics = None
+if 'analyzer_generated_report' not in st.session_state:
+    st.session_state.analyzer_generated_report = None
 
 # ===================== CUSTOM CSS PRO =====================
 st.markdown("""
@@ -2977,6 +2978,7 @@ elif mode == TXT["modes"][6]:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # Options d'analyse
+    # Options d'analyse
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.subheader("⚙️ " + T("Options d'analyse", "Analysis Options"))
     
@@ -2986,21 +2988,21 @@ elif mode == TXT["modes"][6]:
             "🔗 Graphe de dépendances",
             value=True,
             help=T("Générer le graphe des dépendances", "Generate dependency graph"),
-            key="analyzer_deps"
+            key="analyzer_deps_checkbox"  # ← CORRIGÉ
         )
     with col2:
         analyze_metrics = st.checkbox(
             "📊 Métriques détaillées",
             value=True,
             help=T("Calculer les métriques par programme", "Calculate metrics per program"),
-            key="analyzer_metrics"
+            key="analyzer_metrics_checkbox"  # ← CORRIGÉ
         )
     with col3:
         generate_report = st.checkbox(
             "📄 Rapport complet",
             value=True,
             help=T("Générer rapport Markdown + JSON", "Generate Markdown + JSON report"),
-            key="analyzer_report"
+            key="analyzer_report_checkbox"  # ← CORRIGÉ
         )
     
     st.markdown('</div>', unsafe_allow_html=True)
@@ -3032,7 +3034,7 @@ elif mode == TXT["modes"][6]:
         L'analyseur détecte automatiquement les fichiers par extension.
         """)
 
-    # Bouton d'analyse (reste identique)
+    # Bouton d'analyse
     analyze_button = st.button(
         "🚀 " + T("LANCER ANALYSE", "START ANALYSIS"),
         disabled=not uploaded_zip or not st.session_state.analyzer_uploaded_files,
@@ -3050,19 +3052,19 @@ elif mode == TXT["modes"][6]:
                 analyzer.analyze_files(st.session_state.analyzer_uploaded_files)
                 
                 # Calculer les métriques
-                metrics = analyzer.compute_metrics()
+                computed_metrics = analyzer.compute_metrics()
                 
                 # Construire le graphe
-                graph = analyzer.build_dependency_graph() if analyze_deps else None
+                dependency_graph = analyzer.build_dependency_graph() if analyze_deps else None
                 
                 # Générer le rapport JSON
-                report_json = analyzer.generate_report_json()
+                generated_report = analyzer.generate_report_json()
                 
-                # Stocker dans session_state
+                # Stocker dans session_state avec des noms distincts des widgets
                 st.session_state.analyzer_results = analyzer
-                st.session_state.analyzer_metrics = metrics
-                st.session_state.analyzer_dependency_graph = graph
-                st.session_state.analyzer_report_json = report_json
+                st.session_state.analyzer_computed_metrics = computed_metrics  # ← CORRIGÉ
+                st.session_state.analyzer_dependency_graph = dependency_graph
+                st.session_state.analyzer_generated_report = generated_report  # ← CORRIGÉ
                 
                 st.success("✅ " + T("Analyse terminée !", "Analysis completed!"))
             
@@ -3071,15 +3073,12 @@ elif mode == TXT["modes"][6]:
                 import traceback
                 st.code(traceback.format_exc(), language="python")
 
-    # Le reste du code (affichage des résultats) reste identique...
-    # [Garder tous les TABs et exports comme avant]
-
     # Affichage des résultats (persistant)
     if st.session_state.analyzer_results:
         analyzer = st.session_state.analyzer_results
-        metrics = st.session_state.analyzer_metrics
+        metrics = st.session_state.analyzer_computed_metrics  # ← CORRIGÉ
         graph = st.session_state.analyzer_dependency_graph
-        report_json = st.session_state.analyzer_report_json
+        report_json = st.session_state.analyzer_generated_report  # ← CORRIGÉ
 
         # Onglets d'affichage
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -3089,7 +3088,8 @@ elif mode == TXT["modes"][6]:
             "🗄️ Datasets",
             "🔗 Graphe de Dépendances"
         ])
-
+        
+        # [Le reste du code des TABs reste identique...]
         # TAB 1 : Métriques
         with tab1:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
