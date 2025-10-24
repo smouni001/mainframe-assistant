@@ -3827,12 +3827,13 @@ elif mode == TXT["modes"][6]:
             st.subheader("📘 Inventaire Complet des Programmes")
             
             if analyzer.programs:
+                # ✅ APRÈS (corrigé)
                 df_programs = pd.DataFrame([
                     {
                         'Nom': p.name,
                         'Type': p.component_type.value.replace('COBOL_', ''),
                         'Lignes': p.lines,
-                        'Paragraphes': p.paragraphes,
+                        'Paragraphes': p.paragraphs,  # ← CORRIGÉ
                         'Sections': p.sections,
                         'Complexité': p.complexity_score,
                         'Risque': p.risk_level,
@@ -3848,6 +3849,7 @@ elif mode == TXT["modes"][6]:
                     }
                     for p in analyzer.programs.values()
                 ])
+                
                 
                 # Tri par complexité décroissant
                 df_programs = df_programs.sort_values('Complexité', ascending=False)
