@@ -22,3 +22,6 @@ faiss-cpu>=1.7.4
 
 # Optional: dotenv if you load secrets locally
 python-dotenv>=1.0.1
+
+networkx>=3.0
+matplotlib>=3.5.0

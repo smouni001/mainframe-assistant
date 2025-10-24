@@ -102,6 +102,18 @@ if 'business_rules_language' not in st.session_state:
 if 'business_rules_filename' not in st.session_state:
     st.session_state.business_rules_filename = None
 
+# Mode 7 : Application Analyzer
+if 'analyzer_results' not in st.session_state:
+    st.session_state.analyzer_results = None
+if 'analyzer_uploaded_files' not in st.session_state:
+    st.session_state.analyzer_uploaded_files = []
+if 'analyzer_dependency_graph' not in st.session_state:
+    st.session_state.analyzer_dependency_graph = None
+if 'analyzer_metrics' not in st.session_state:
+    st.session_state.analyzer_metrics = None
+if 'analyzer_report_json' not in st.session_state:
+    st.session_state.analyzer_report_json = None    
+
 # ===================== CUSTOM CSS PRO =====================
 st.markdown("""
 <style>
@@ -652,6 +664,301 @@ def detect_critical_conflicts(df: pd.DataFrame) -> pd.DataFrame:
     df.drop(columns=['_env_couloir_key'], inplace=True)
     
     return df
+# ===================== APPLICATION ANALYZER - CLASSES & PARSERS =====================
+import re
+import json
+from dataclasses import dataclass, asdict
+from typing import Dict, Set
+from collections import defaultdict
+
+@dataclass
+class ProgramInfo:
+    name: str
+    path: str
+    lines: int
+    complexity: int
+    reads: List[str]
+    writes: List[str]
+    calls: List[str]
+    paragraphs: int
+    io_operations: int
+
+@dataclass
+class JCLStepInfo:
+    name: str
+    job: str
+    program: str
+    conds: List[str]
+    dd_names: List[str]
+    datasets: List[str]
+
+@dataclass
+class DatasetInfo:
+    name: str
+    type: str
+    produced_by: List[str]
+    consumed_by: List[str]
+
+class COBOLParser:
+    """Parser simple pour COBOL"""
+    
+    @staticmethod
+    def parse(content: str, filename: str) -> ProgramInfo:
+        lines = content.split('\n')
+        
+        # Comptage basique
+        total_lines = len([l for l in lines if l.strip() and not l.strip().startswith('*')])
+        
+        # Extraction du nom de programme
+        prog_name = filename.replace('.cbl', '').replace('.cob', '').upper()
+        for line in lines:
+            if 'PROGRAM-ID' in line.upper():
+                match = re.search(r'PROGRAM-ID\.\s+(\w+)', line.upper())
+                if match:
+                    prog_name = match.group(1)
+                    break
+        
+        # Comptage des paragraphes
+        paragraphs = len(re.findall(r'^\s*[A-Z0-9\-]+\s*\.\s*$', content, re.MULTILINE))
+        
+        # Opérations I/O
+        io_ops = (
+            content.upper().count('READ ') + 
+            content.upper().count('WRITE ') + 
+            content.upper().count('REWRITE ') +
+            content.upper().count('DELETE ')
+        )
+        
+        # Fichiers en lecture
+        reads = []
+        for line in lines:
+            if 'SELECT' in line.upper() and 'ASSIGN' in line.upper():
+                match = re.search(r'SELECT\s+(\w+)', line.upper())
+                if match:
+                    reads.append(match.group(1))
+        
+        # Fichiers en écriture (même logique)
+        writes = list(set(re.findall(r'WRITE\s+(\w+)', content.upper())))
+        
+        # Appels de programmes
+        calls = list(set(re.findall(r'CALL\s+[\'"](\w+)[\'"]', content.upper())))
+        
+        # Complexité cyclomatique approximée
+        complexity = (
+            content.upper().count('IF ') +
+            content.upper().count('PERFORM ') +
+            content.upper().count('GO TO ') +
+            content.upper().count('EVALUATE ')
+        )
+        
+        return ProgramInfo(
+            name=prog_name,
+            path=filename,
+            lines=total_lines,
+            complexity=max(1, complexity),
+            reads=reads,
+            writes=writes,
+            calls=calls,
+            paragraphs=paragraphs,
+            io_operations=io_ops
+        )
+
+class JCLParser:
+    """Parser simple pour JCL"""
+    
+    @staticmethod
+    def parse(content: str, filename: str) -> List[JCLStepInfo]:
+        steps = []
+        lines = content.split('\n')
+        
+        current_job = "UNKNOWN"
+        current_step = None
+        current_pgm = None
+        current_dds = []
+        current_conds = []
+        current_datasets = []
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Job card
+            if line.startswith('//') and 'JOB' in line:
+                match = re.match(r'//(\w+)\s+JOB', line)
+                if match:
+                    current_job = match.group(1)
+            
+            # Step card
+            elif line.startswith('//') and 'EXEC' in line:
+                # Sauvegarder le step précédent
+                if current_step:
+                    steps.append(JCLStepInfo(
+                        name=current_step,
+                        job=current_job,
+                        program=current_pgm or "UNKNOWN",
+                        conds=current_conds,
+                        dd_names=current_dds,
+                        datasets=current_datasets
+                    ))
+                
+                # Nouveau step
+                match = re.match(r'//(\w+)\s+EXEC', line)
+                if match:
+                    current_step = match.group(1)
+                    current_dds = []
+                    current_conds = []
+                    current_datasets = []
+                    
+                    # Programme
+                    pgm_match = re.search(r'PGM=(\w+)', line)
+                    if pgm_match:
+                        current_pgm = pgm_match.group(1)
+                    
+                    # Condition
+                    cond_match = re.search(r'COND=\(([^)]+)\)', line)
+                    if cond_match:
+                        current_conds.append(cond_match.group(1))
+            
+            # DD statement
+            elif line.startswith('//') and 'DD' in line and current_step:
+                match = re.match(r'//(\w+)\s+DD', line)
+                if match:
+                    dd_name = match.group(1)
+                    current_dds.append(dd_name)
+                    
+                    # Dataset name
+                    dsn_match = re.search(r'DSN=([^,\s]+)', line)
+                    if dsn_match:
+                        current_datasets.append(dsn_match.group(1))
+        
+        # Dernier step
+        if current_step:
+            steps.append(JCLStepInfo(
+                name=current_step,
+                job=current_job,
+                program=current_pgm or "UNKNOWN",
+                conds=current_conds,
+                dd_names=current_dds,
+                datasets=current_datasets
+            ))
+        
+        return steps
+
+class ApplicationAnalyzer:
+    """Analyseur principal"""
+    
+    def __init__(self):
+        self.programs: Dict[str, ProgramInfo] = {}
+        self.jcl_steps: List[JCLStepInfo] = []
+        self.datasets: Dict[str, DatasetInfo] = {}
+        self.dependencies: Dict[str, Set[str]] = defaultdict(set)
+    
+    def analyze_files(self, files: List[Tuple[str, bytes]]):
+        """Analyse tous les fichiers uploadés"""
+        
+        for filename, content_bytes in files:
+            try:
+                content = content_bytes.decode('utf-8', errors='ignore')
+                
+                if filename.endswith(('.cbl', '.cob')):
+                    prog_info = COBOLParser.parse(content, filename)
+                    self.programs[prog_info.name] = prog_info
+                
+                elif filename.endswith(('.jcl', '.txt')):
+                    steps = JCLParser.parse(content, filename)
+                    self.jcl_steps.extend(steps)
+                    
+                    # Construire dépendances
+                    for i, step in enumerate(steps):
+                        if i > 0:
+                            prev_step = steps[i-1]
+                            self.dependencies[step.name].add(prev_step.name)
+            
+            except Exception as e:
+                st.warning(f"⚠️ Erreur parsing {filename}: {e}")
+                continue
+        
+        # Construire datasets
+        self._build_datasets()
+    
+    def _build_datasets(self):
+        """Construit le registre des datasets"""
+        for step in self.jcl_steps:
+            for dsn in step.datasets:
+                if dsn not in self.datasets:
+                    self.datasets[dsn] = DatasetInfo(
+                        name=dsn,
+                        type="SEQUENTIAL",
+                        produced_by=[],
+                        consumed_by=[]
+                    )
+                
+                # Heuristique : si DD OUTPUT/REPORT → produced, sinon consumed
+                if any(dd in ['OUTPUT', 'REPORT', 'SORTOUT'] for dd in step.dd_names):
+                    self.datasets[dsn].produced_by.append(step.name)
+                else:
+                    self.datasets[dsn].consumed_by.append(step.name)
+    
+    def compute_metrics(self) -> Dict:
+        """Calcule les métriques globales"""
+        total_lines = sum(p.lines for p in self.programs.values())
+        avg_complexity = sum(p.complexity for p in self.programs.values()) / max(1, len(self.programs))
+        
+        return {
+            "total_programs": len(self.programs),
+            "total_jcl_steps": len(self.jcl_steps),
+            "total_datasets": len(self.datasets),
+            "total_lines": total_lines,
+            "avg_complexity": round(avg_complexity, 2),
+            "max_complexity": max((p.complexity for p in self.programs.values()), default=0),
+            "total_io_operations": sum(p.io_operations for p in self.programs.values())
+        }
+    
+    def build_dependency_graph(self):
+        """Construit le graphe NetworkX"""
+        try:
+            import networkx as nx
+        except ImportError:
+            st.error("❌ Installez networkx : pip install networkx")
+            return None
+        
+        G = nx.DiGraph()
+        
+        # Ajouter les noeuds
+        for prog_name in self.programs.keys():
+            G.add_node(prog_name, type='PROGRAM')
+        
+        for step in self.jcl_steps:
+            G.add_node(step.name, type='STEP')
+        
+        # Ajouter les arêtes
+        for step in self.jcl_steps:
+            if step.program in self.programs:
+                G.add_edge(step.name, step.program, type='EXECUTES')
+        
+        for target, sources in self.dependencies.items():
+            for source in sources:
+                G.add_edge(source, target, type='PRECEDES')
+        
+        return G
+    
+    def generate_report_json(self) -> Dict:
+        """Génère le rapport JSON complet"""
+        graph_dict = {
+            "nodes": list(self.programs.keys()) + [s.name for s in self.jcl_steps],
+            "edges": [[s, t] for s, targets in self.dependencies.items() for t in targets]
+        }
+        
+        return {
+            "meta": {
+                "project": "MainframeAnalysis",
+                "analyzed_at": datetime.now().isoformat()
+            },
+            "programs": [asdict(p) for p in self.programs.values()],
+            "jcl_steps": [asdict(s) for s in self.jcl_steps],
+            "datasets": [asdict(d) for d in self.datasets.values()],
+            "dependency_graph": graph_dict,
+            "metrics_summary": self.compute_metrics()
+        }
 
 # ===================== UI LABELS =====================
 TEXTS = {
@@ -663,7 +970,8 @@ TEXTS = {
             "🧪 Test COBOL",
             "📄 Analyse documentaire", 
             "⚙️ Analyse RGC",
-            "📊 Extraction Règles de Gestion"  # ← NOUVEAU MODE
+            "📊 Extraction Règles de Gestion",
+            "🔍 Application Analyzer"  # ← NOUVEAU MODE
         ],
     },
     "English": {
@@ -674,7 +982,8 @@ TEXTS = {
             "🧪 COBOL Testing",
             "📄 Document Analysis", 
             "⚙️ RGC Analysis",
-            "📊 Business Rules Extraction"  # ← NOUVEAU MODE
+            "📊 Business Rules Extraction",
+            "🔍 Application Analyzer"  # ← NOUVEAU MODE
         ],
     }
 }
@@ -2535,6 +2844,436 @@ FIN DU DOCUMENT
             st.metric("Points d'ambiguïté", nb_ambiguites)
         
         st.markdown('</div>', unsafe_allow_html=True)
+# ===================== MODE 7 : APPLICATION ANALYZER =====================
+elif mode == TXT["modes"][6]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("🔍 " + T(
+        "Application Analyzer - Analyse Statique Legacy", 
+        "Application Analyzer - Legacy Static Analysis"
+    ))
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("""
+    <div class="info-box">
+        🎯 <strong>Analyse complète de code Mainframe</strong><br>
+        Analysez automatiquement vos applications legacy :<br>
+        • ✅ Parse COBOL, JCL, Copybooks<br>
+        • ✅ Extrait dépendances et datasets<br>
+        • ✅ Calcule métriques et complexité<br>
+        • ✅ Génère graphe de dépendances<br>
+        • ✅ Rapport JSON + Markdown + Excel<br>
+        • ✅ Export ZIP complet<br>
+        <br>
+        <strong>Formats supportés :</strong> .cbl, .cob, .jcl, .txt, .cpy
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Upload multiple files
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("📂 " + T("Chargement des sources", "Source Upload"))
+    
+    uploaded_sources = st.file_uploader(
+        "📦 " + T("Fichiers sources (COBOL, JCL, COPY)", "Source files (COBOL, JCL, COPY)"),
+        type=["cbl", "cob", "jcl", "txt", "cpy"],
+        accept_multiple_files=True,
+        help=T("Sélectionnez tous les fichiers à analyser", "Select all files to analyze"),
+        key="analyzer_file_uploader"
+    )
+    
+    if uploaded_sources:
+        st.markdown(f"""
+        <div class="success-box">
+            ✅ <strong>{len(uploaded_sources)} fichier(s) chargé(s)</strong>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Stockage des fichiers
+        st.session_state.analyzer_uploaded_files = [
+            (f.name, f.read()) for f in uploaded_sources
+        ]
+        
+        # Aperçu des fichiers
+        st.markdown("**📋 Fichiers détectés :**")
+        
+        file_types = defaultdict(int)
+        for fname, _ in st.session_state.analyzer_uploaded_files:
+            if fname.endswith(('.cbl', '.cob')):
+                file_types['COBOL'] += 1
+            elif fname.endswith('.jcl'):
+                file_types['JCL'] += 1
+            elif fname.endswith('.cpy'):
+                file_types['COPYBOOK'] += 1
+            else:
+                file_types['AUTRE'] += 1
+        
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("📘 COBOL", file_types.get('COBOL', 0))
+        col2.metric("🔧 JCL", file_types.get('JCL', 0))
+        col3.metric("📖 COPYBOOK", file_types.get('COPYBOOK', 0))
+        col4.metric("📄 AUTRE", file_types.get('AUTRE', 0))
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Options d'analyse
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("⚙️ " + T("Options d'analyse", "Analysis Options"))
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        analyze_deps = st.checkbox(
+            "🔗 Graphe de dépendances",
+            value=True,
+            help=T("Générer le graphe des dépendances", "Generate dependency graph"),
+            key="analyzer_deps"
+        )
+    with col2:
+        analyze_metrics = st.checkbox(
+            "📊 Métriques détaillées",
+            value=True,
+            help=T("Calculer les métriques par programme", "Calculate metrics per program"),
+            key="analyzer_metrics"
+        )
+    with col3:
+        generate_report = st.checkbox(
+            "📄 Rapport complet",
+            value=True,
+            help=T("Générer rapport Markdown + JSON", "Generate Markdown + JSON report"),
+            key="analyzer_report"
+        )
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Bouton d'analyse
+    analyze_button = st.button(
+        "🚀 " + T("LANCER ANALYSE", "START ANALYSIS"),
+        disabled=not uploaded_sources,
+        use_container_width=True,
+        key="analyzer_analyze_btn"
+    )
+
+    if analyze_button and st.session_state.analyzer_uploaded_files:
+        with st.spinner(T("🧠 Analyse en cours...", "🧠 Analyzing...")):
+            # Initialiser l'analyseur
+            analyzer = ApplicationAnalyzer()
+            
+            try:
+                # Analyser tous les fichiers
+                analyzer.analyze_files(st.session_state.analyzer_uploaded_files)
+                
+                # Calculer les métriques
+                metrics = analyzer.compute_metrics()
+                
+                # Construire le graphe
+                graph = analyzer.build_dependency_graph() if analyze_deps else None
+                
+                # Générer le rapport JSON
+                report_json = analyzer.generate_report_json()
+                
+                # Stocker dans session_state
+                st.session_state.analyzer_results = analyzer
+                st.session_state.analyzer_metrics = metrics
+                st.session_state.analyzer_dependency_graph = graph
+                st.session_state.analyzer_report_json = report_json
+                
+                st.success("✅ " + T("Analyse terminée !", "Analysis completed!"))
+            
+            except Exception as e:
+                st.error(f"❌ Erreur lors de l'analyse : {e}")
+                import traceback
+                st.code(traceback.format_exc(), language="python")
+
+    # Affichage des résultats (persistant)
+    if st.session_state.analyzer_results:
+        analyzer = st.session_state.analyzer_results
+        metrics = st.session_state.analyzer_metrics
+        graph = st.session_state.analyzer_dependency_graph
+        report_json = st.session_state.analyzer_report_json
+
+        # Onglets d'affichage
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Métriques Globales",
+            "📘 Programmes",
+            "🔧 JCL Steps",
+            "🗄️ Datasets",
+            "🔗 Graphe de Dépendances"
+        ])
+
+        # TAB 1 : Métriques
+        with tab1:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📊 Métriques Globales du Projet")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("📦 Programmes", metrics['total_programs'])
+            col2.metric("🔧 Steps JCL", metrics['total_jcl_steps'])
+            col3.metric("🗄️ Datasets", metrics['total_datasets'])
+            col4.metric("📝 Lignes totales", metrics['total_lines'])
+            
+            st.markdown("---")
+            
+            col5, col6, col7 = st.columns(3)
+            col5.metric("🧮 Complexité moyenne", metrics['avg_complexity'])
+            col6.metric("⚠️ Complexité max", metrics['max_complexity'])
+            col7.metric("💾 Opérations I/O", metrics['total_io_operations'])
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Graphiques
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📈 Visualisations")
+            
+            try:
+                import matplotlib.pyplot as plt
+                
+                # Graphique 1 : Distribution complexité
+                fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+                fig.patch.set_facecolor('#1E1E2E')
+                
+                complexities = [p.complexity for p in analyzer.programs.values()]
+                axes[0].hist(complexities, bins=10, color='#4EA3FF', edgecolor='white')
+                axes[0].set_title('Distribution de la Complexité', color='white')
+                axes[0].set_xlabel('Complexité', color='white')
+                axes[0].set_ylabel('Nombre de programmes', color='white')
+                axes[0].tick_params(colors='white')
+                axes[0].set_facecolor('#262636')
+                
+                # Graphique 2 : Top 10 programmes par lignes
+                top_programs = sorted(analyzer.programs.values(), key=lambda p: p.lines, reverse=True)[:10]
+                names = [p.name[:15] for p in top_programs]
+                lines = [p.lines for p in top_programs]
+                
+                axes[1].barh(names, lines, color='#00D9A5')
+                axes[1].set_title('Top 10 Programmes (lignes)', color='white')
+                axes[1].set_xlabel('Lignes de code', color='white')
+                axes[1].tick_params(colors='white')
+                axes[1].set_facecolor('#262636')
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+            
+            except ImportError:
+                st.info("💡 Installez matplotlib pour voir les graphiques")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # TAB 2 : Programmes
+        with tab2:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("📘 Liste des Programmes COBOL")
+            
+            if analyzer.programs:
+                df_programs = pd.DataFrame([
+                    {
+                        'Nom': p.name,
+                        'Fichier': p.path,
+                        'Lignes': p.lines,
+                        'Complexité': p.complexity,
+                        'Paragraphes': p.paragraphs,
+                        'I/O Ops': p.io_operations,
+                        'Reads': ', '.join(p.reads[:3]),
+                        'Writes': ', '.join(p.writes[:3]),
+                        'Calls': ', '.join(p.calls[:3])
+                    }
+                    for p in analyzer.programs.values()
+                ])
+                
+                st.dataframe(df_programs, use_container_width=True, height=400)
+                
+                # Export CSV
+                csv_programs = df_programs.to_csv(index=False, sep=';', encoding='utf-8')
+                st.download_button(
+                    "📥 Télécharger liste programmes (CSV)",
+                    data=csv_programs.encode('utf-8'),
+                    file_name="programs_list.csv",
+                    key="analyzer_download_programs_csv"
+                )
+            else:
+                st.info("Aucun programme COBOL détecté")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # TAB 3 : JCL Steps
+        with tab3:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("🔧 Steps JCL")
+            
+            if analyzer.jcl_steps:
+                df_jcl = pd.DataFrame([
+                    {
+                        'Step': s.name,
+                        'Job': s.job,
+                        'Programme': s.program,
+                        'Conditions': ', '.join(s.conds),
+                        'DD Names': ', '.join(s.dd_names[:5]),
+                        'Datasets': ', '.join(s.datasets[:3])
+                    }
+                    for s in analyzer.jcl_steps
+                ])
+                
+                st.dataframe(df_jcl, use_container_width=True, height=400)
+            else:
+                st.info("Aucun JCL détecté")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # TAB 4 : Datasets
+        with tab4:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("🗄️ Datasets Identifiés")
+            
+            if analyzer.datasets:
+                df_datasets = pd.DataFrame([
+                    {
+                        'Dataset': d.name,
+                        'Type': d.type,
+                        'Produit par': ', '.join(d.produced_by),
+                        'Consommé par': ', '.join(d.consumed_by)
+                    }
+                    for d in analyzer.datasets.values()
+                ])
+                
+                st.dataframe(df_datasets, use_container_width=True, height=400)
+            else:
+                st.info("Aucun dataset détecté")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # TAB 5 : Graphe
+        with tab5:
+            st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+            st.subheader("🔗 Graphe de Dépendances")
+            
+            if graph:
+                try:
+                    import networkx as nx
+                    import matplotlib.pyplot as plt
+                    
+                    fig, ax = plt.subplots(figsize=(14, 10))
+                    fig.patch.set_facecolor('#1E1E2E')
+                    ax.set_facecolor('#262636')
+                    
+                    pos = nx.spring_layout(graph, k=2, iterations=50)
+                    
+                    # Dessiner le graphe
+                    nx.draw_networkx_nodes(graph, pos, node_color='#4EA3FF', node_size=1500, ax=ax)
+                    nx.draw_networkx_labels(graph, pos, font_size=8, font_color='white', ax=ax)
+                    nx.draw_networkx_edges(graph, pos, edge_color='#00D9A5', arrows=True, 
+                                          arrowsize=20, width=2, ax=ax)
+                    
+                    ax.set_title('Graphe de Dépendances', color='white', fontsize=16, pad=20)
+                    ax.axis('off')
+                    
+                    plt.tight_layout()
+                    st.pyplot(fig)
+                    
+                    # Statistiques du graphe
+                    st.markdown("---")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Noeuds", graph.number_of_nodes())
+                    col2.metric("Arêtes", graph.number_of_edges())
+                    
+                    try:
+                        cycles = list(nx.simple_cycles(graph))
+                        col3.metric("Cycles détectés", len(cycles), delta="⚠️" if cycles else "✅")
+                    except:
+                        col3.metric("Cycles", "N/A")
+                
+                except ImportError:
+                    st.error("❌ Installez networkx et matplotlib")
+            else:
+                st.info("Graphe non généré")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # Exports finaux
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("💾 " + T("Exports & Rapports", "Exports & Reports"))
+        
+        col1, col2, col3 = st.columns(3)
+        
+        # Export JSON
+        with col1:
+            json_data = json.dumps(report_json, indent=2, ensure_ascii=False)
+            st.download_button(
+                "📄 Rapport JSON",
+                data=json_data.encode('utf-8'),
+                file_name=f"report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True,
+                key="analyzer_download_json"
+            )
+        
+        # Export Markdown
+        with col2:
+            markdown_report = f"""# Rapport d'Analyse Mainframe
+
+**Date :** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+## Résumé Exécutif
+
+- **Programmes analysés :** {metrics['total_programs']}
+- **Steps JCL :** {metrics['total_jcl_steps']}
+- **Datasets :** {metrics['total_datasets']}
+- **Lignes de code :** {metrics['total_lines']:,}
+- **Complexité moyenne :** {metrics['avg_complexity']}
+
+## Programmes COBOL
+
+| Nom | Lignes | Complexité | I/O Ops |
+|-----|--------|------------|---------|
+{"".join([f"| {p.name} | {p.lines} | {p.complexity} | {p.io_operations} |\n" for p in analyzer.programs.values()])}
+
+## Datasets
+
+{"".join([f"- **{d.name}** ({d.type})\n" for d in analyzer.datasets.values()])}
+
+## Recommandations
+
+- Programmes avec complexité > 15 nécessitent une revue
+- Datasets partagés : attention aux accès concurrents
+- Documenter les dépendances critiques
+
+---
+*Généré par Application Analyzer*
+"""
+            st.download_button(
+                "📝 Rapport Markdown",
+                data=markdown_report.encode('utf-8'),
+                file_name=f"summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+                use_container_width=True,
+                key="analyzer_download_md"
+            )
+        
+        # Export ZIP complet
+        with col3:
+            try:
+                zip_buf = io.BytesIO()
+                with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    # JSON
+                    zipf.writestr("report.json", json_data)
+                    
+                    # Markdown
+                    zipf.writestr("summary_FR.md", markdown_report)
+                    
+                    # Metrics CSV
+                    if not df_programs.empty:
+                        csv_content = df_programs.to_csv(index=False, sep=';')
+                        zipf.writestr("metrics.csv", csv_content)
+                
+                zip_buf.seek(0)
+                
+                st.download_button(
+                    "📦 ZIP Complet",
+                    data=zip_buf,
+                    file_name=f"analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    key="analyzer_download_zip"
+                )
+            except Exception as e:
+                st.error(f"❌ Erreur création ZIP : {e}")
+        
+        st.markdown('</div>', unsafe_allow_html=True)        
 # ===================== FOOTER PRO =====================
 st.markdown("""
 <div class="footer-pro">
