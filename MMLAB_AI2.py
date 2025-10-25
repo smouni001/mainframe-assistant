@@ -2562,10 +2562,10 @@ elif mode == TXT["modes"][0]:
     st.markdown("""
     <div class="info-box">
         🎯 <strong>Mode Expert Mainframe </strong><br>
-        Convertissez du pseudo-code en programmes mainframe professionnels :<br>
+        Convertissez du pseudo-code en programmes mainframe :<br>
         • ✅ COBOL structuré et documenté<br>
         • ✅ PL/I optimisé<br>
-        • ✅ Assembler (HLASM) avec macros<br>
+        • ✅ Assembler (HLASM) <br>
         • ✅ Respect des standards IBM z/OS<br>
         • ✅ Code prêt à compilation
     </div>
@@ -2866,14 +2866,14 @@ elif mode == TXT["modes"][5]:
     st.markdown("""
     <div class="info-box">
         🎯 <strong>Mode Expert Analyse Legacy</strong><br>
-        Extrayez automatiquement les règles de gestion depuis du code mainframe :<br>
+        Extrayez les règles de gestion depuis du code mainframe :<br>
         • ✅ Analyse complète COBOL/PL/I/Assembler<br>
         • ✅ Dictionnaire de données automatique<br>
         • ✅ Règles numérotées et documentées<br>
         • ✅ Scénarios de tests recommandés<br>
         • ✅ Document lisible par non-techniciens<br>
         <br>
-        <strong>Format de sortie :</strong> Document structuré en français (Word + TXT)
+        <strong>Format de sortie :</strong> Document structuré (Word + TXT)
     </div>
     """, unsafe_allow_html=True)
 
@@ -3314,8 +3314,8 @@ FIN DU DOCUMENT
 elif mode == TXT["modes"][6]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("🔍 " + T(
-        "Application Analyzer ULTIMATE - Reverse Engineering avec IA", 
-        "Application Analyzer ULTIMATE - AI-Powered Reverse Engineering"
+        "Application Analyzer ULTIMATE - Reverse Engineering", 
+        "Application Analyzer ULTIMATE - Reverse Engineering"
     ))
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -3329,7 +3329,7 @@ elif mode == TXT["modes"][6]:
         • Identification ressources : Transactions, Tables, Segments, Queues<br>
         • Analyse copybooks, fichiers VSAM, JCL steps<br>
         <br>
-        <strong>🤖 Analyse Intelligente par IA :</strong><br>
+        <strong>🤖 Analyse Intelligente :</strong><br>
         • Compréhension du rôle métier de chaque programme<br>
         • Explication du flux de données en langage naturel<br>
         • Identification des points critiques et risques<br>
