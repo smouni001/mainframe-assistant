@@ -4155,9 +4155,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---- Hide Streamlit Footer ----
-hide_footer_style = """
-    <style>
-    footer {visibility: hidden;}      /* Cache le footer */
-    </style>
+
+st.set_page_config(page_title="Mon App", page_icon="🚀", layout="wide")
+
+hide_streamlit_default = """
+<style>
+/* Supprime le bouton d'aide / feedback */
+.stAppDeployButton {display: none !important;}
+.stFeedbackButton {display: none !important;}
+
+/* Supprime le logo Streamlit dans le coin */
+.stApp > header {visibility: hidden;}
+.st-emotion-cache-7oyrr6 {display: none !important;} /* logo bas droite (classes changent parfois) */
+
+/* Alternative plus agressive (tout supprimer dans le coin inférieur droit) */
+[data-testid="stDecoration"] {display: none !important;}
+</style>
 """
-st.markdown(hide_footer_style, unsafe_allow_html=True)
+st.markdown(hide_streamlit_default, unsafe_allow_html=True)
