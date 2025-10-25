@@ -2051,6 +2051,22 @@ elif mode == TXT["modes"][4]:
         ),
         key="rgc_file_uploader"
     )
+     # Structure ZIP recommandée
+    with st.expander("📚 Structure fichier txt à importer "):
+        col_left= st.columns(1)
+        
+        with col_left:
+            st.markdown("""
+            **Structure txt :**
+            ```
+            GCL.txt
+            ├── programme : 8 caractéres | Version : 3 caractéres | Type de programme : 3 caractéres | Date de création : 10 caractéres | Date de modification : 10 caractéres | Environnement : 4 Caractéres | Couloir : 2 caractéres | Modifié Par : X Caractéres 
+           
+            Exemple : 
+            PGMCOB01V01COB2024-01-152024-03-02PRODC1ASMUNI
+            
+            """)
+        
 
     if uploaded_config:
         # Vérifier si c'est un nouveau fichier
