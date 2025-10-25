@@ -4153,3 +4153,11 @@ st.markdown("""
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# ---- Hide Streamlit Footer ----
+hide_footer_style = """
+    <style>
+    footer {visibility: hidden;}      /* Cache le footer */
+    </style>
+"""
+st.markdown(hide_footer_style, unsafe_allow_html=True)
