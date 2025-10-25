@@ -4163,8 +4163,6 @@ hide_footer_style = """
 st.markdown(hide_footer_style, unsafe_allow_html=True)
 
 
-st.set_page_config(page_title="Mon App", page_icon="🚀", layout="wide")
-
 HIDE_STREAMLIT = """
 <style>
 /* Supprime le footer */
