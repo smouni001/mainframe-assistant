@@ -38,7 +38,14 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
+hide_streamlit_style = """
+    <style>
+    #MainMenu {visibility: hidden;}        /* Menu Hamburger */
+    footer {visibility: hidden;}           /* Footer "Made with Streamlit" */
+    header {visibility: hidden;}           /* Optionnel : cache le header */
+    </style>
+"""
+st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 # ===================== SESSION STATE INITIALIZATION =====================
 # Mode 1 : Analyse documentaire
 if 'doc_analysis_result' not in st.session_state:
