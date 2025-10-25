@@ -2053,7 +2053,7 @@ elif mode == TXT["modes"][4]:
     )
      # Structure ZIP recommandée
     with st.expander("📚 Structure fichier txt à importer "):
-        col_left= st.columns(1)
+        col_left= st.columns(1)[0]
         
         with col_left:
             st.markdown("""
