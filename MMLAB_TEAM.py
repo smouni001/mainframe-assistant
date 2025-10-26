@@ -121,6 +121,17 @@ if 'analyzer_computed_metrics' not in st.session_state:
     st.session_state.analyzer_computed_metrics = None
 if 'analyzer_generated_report' not in st.session_state:
     st.session_state.analyzer_generated_report = None
+# Mode 8 : COBOL ↔ RPG Conversion
+if 'cobol_rpg_result' not in st.session_state:
+    st.session_state.cobol_rpg_result = None
+if 'cobol_rpg_source_code' not in st.session_state:
+    st.session_state.cobol_rpg_source_code = None
+if 'cobol_rpg_source_language' not in st.session_state:
+    st.session_state.cobol_rpg_source_language = None
+if 'cobol_rpg_target_language' not in st.session_state:
+    st.session_state.cobol_rpg_target_language = None
+if 'cobol_rpg_filename' not in st.session_state:
+    st.session_state.cobol_rpg_filename = None
 
 # ===================== CUSTOM CSS PRO =====================
 st.markdown("""
@@ -1442,7 +1453,8 @@ TEXTS = {
             "📄 Analyse documentaire", 
             "⚙️ Analyse RGC",
             "📊 Extraction Règles de Gestion",
-            "🔍 Application Analyzer"  # ← NOUVEAU MODE
+            "🔍 Application Analyzer" , # ← NOUVEAU MODE
+            "⚡ Conversion COBOL ↔ RPG"
         ],
     },
     "English": {
@@ -1454,7 +1466,8 @@ TEXTS = {
             "📄 Document Analysis", 
             "⚙️ RGC Analysis",
             "📊 Business Rules Extraction",
-            "🔍 Application Analyzer"  # ← NOUVEAU MODE
+            "🔍 Application Analyzer" , # ← NOUVEAU MODE
+            "⚡ Conversion COBOL ↔ RPG"
         ],
     }
 }
@@ -1468,6 +1481,41 @@ mode = st.sidebar.radio(
     index=0,
     help=T("Sélectionnez le mode de traitement souhaité", "Select your processing mode")
 )
+# ===================== MODE 8: COBOL ↔ RPG CONVERSION =====================
+def convert_cobol_rpg_with_llm(source_code: str, source_lang: str, target_lang: str, api_key: str) -> dict:
+    """Convertit COBOL vers RPG ou vice-versa avec explications."""
+    if not CLAUDE_AVAILABLE or not api_key:
+        return {'converted_code': None, 'explanation': "❌ Claude API requise", 'error': True}
+    
+    prompt = f"""Tu es un expert mainframe. Convertis ce code {source_lang} vers {target_lang}.
+
+CODE SOURCE:
+
+INSTRUCTIONS:
+1. Conversion complète et fidèle
+2. Standards: COBOL (DIVISION, PIC) / RPG (D-spec, F-spec)
+3. Correspondances: types, structures, fichiers, logique
+4. Explications détaillées de chaque transformation
+
+FORMAT:
+### CODE CONVERTI
+### EXPLICATIONS
+[détails de conversion]"""
+
+    try:
+        llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=api_key, temperature=0.1, max_tokens=8000)
+        response = llm.invoke(prompt)
+        full_response = response.content
+        
+        import re
+        pattern = r'``````'
+        match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
+        converted_code = match.group(1).strip() if match else full_response[:2000]
+        
+        return {'converted_code': converted_code, 'explanation': full_response, 'error': False}
+    except Exception as e:
+        return {'converted_code': None, 'explanation': f"❌ Erreur: {str(e)}", 'error': True}
+
 
 # ===================== MODE 1 : ANALYSE DOC =====================
 if mode == TXT["modes"][3]:
@@ -4141,6 +4189,92 @@ RECOMMANDATIONS PRIORITAIRES:
                     pass
             
             st.markdown('</div>', unsafe_allow_html=True)
+# ===================== MODE 8 : CONVERSION COBOL ↔ RPG =====================
+elif mode == TXT["modes"][7]:
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.header("⚡ " + T("Conversion COBOL ↔ RPG", "COBOL ↔ RPG Conversion"))
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    st.info("🔄 " + T("Conversion bidirectionnelle avec explications", "Bidirectional conversion with explanations"))
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        source_language = st.selectbox("📥 " + T("Source", "Source"), ["COBOL", "RPG"])
+    with col2:
+        target_language = "RPG" if source_language == "COBOL" else "COBOL"
+        st.selectbox("📤 " + T("Cible", "Target"), [target_language], disabled=True)
+    
+    st.markdown("---")
+    input_method = st.radio(T("Méthode", "Method"), 
+                           [T("Coller", "Paste"), T("Fichier", "File")], horizontal=True)
+    
+    source_code = ""
+    uploaded_filename = None
+    
+    if T("Fichier", "File") in input_method:
+        uploaded_file = st.file_uploader("📂", type=["cbl", "cob", "rpg", "rpgle", "txt"], key="m8_file")
+        if uploaded_file:
+            source_code = uploaded_file.read().decode('utf-8', errors='ignore')
+            uploaded_filename = uploaded_file.name
+            st.success(f"✅ {uploaded_filename}")
+    else:
+        source_code = st.text_area(T("Code", "Code"), height=300, key="m8_code")
+    
+    if source_code:
+        with st.expander("👁️ " + T("Aperçu", "Preview"), expanded=False):
+            st.code(source_code, language=source_language.lower())
+    
+    st.markdown("---")
+    col_btn = st.columns([1, 2, 1])
+    with col_btn[1]:
+        convert_btn = st.button(f"⚡ {source_language} → {target_language}", 
+                               type="primary", use_container_width=True, disabled=not source_code, key="m8_conv")
+    
+    if convert_btn and source_code:
+        if not ANTHROPIC_API_KEY:
+            st.error("❌ " + T("Clé API requise", "API key required"))
+        else:
+            with st.spinner("🔄 " + T("Conversion...", "Converting...")):
+                result = convert_cobol_rpg_with_llm(source_code, source_language, target_language, ANTHROPIC_API_KEY)
+                st.session_state.cobol_rpg_result = result
+                st.session_state.cobol_rpg_source_code = source_code
+                st.session_state.cobol_rpg_source_language = source_language
+                st.session_state.cobol_rpg_target_language = target_language
+                st.session_state.cobol_rpg_filename = uploaded_filename or "program"
+                if not result.get('error'):
+                    st.success("✅ " + T("Succès!", "Success!"))
+                    st.rerun()
+    
+    if st.session_state.cobol_rpg_result and not st.session_state.cobol_rpg_result.get('error'):
+        result = st.session_state.cobol_rpg_result
+        st.markdown("---")
+        st.subheader("📊 " + T("Résultats", "Results"))
+        
+        tab1, tab2, tab3 = st.tabs(["💻 Code", "📖 " + T("Explications", "Explanations"), "📥 Download"])
+        
+        with tab1:
+            st.code(result['converted_code'], language=st.session_state.cobol_rpg_target_language.lower())
+            cols = st.columns(3)
+            cols[0].metric(T("Source", "Source"), len(st.session_state.cobol_rpg_source_code.split('\n')))
+            cols[1].metric(T("Généré", "Generated"), len(result['converted_code'].split('\n')))
+            ratio = len(result['converted_code'].split('\n')) / max(len(st.session_state.cobol_rpg_source_code.split('\n')), 1)
+            cols[2].metric("Ratio", f"{ratio:.2f}x")
+        
+        with tab2:
+            st.markdown(result['explanation'])
+        
+        with tab3:
+            base = st.session_state.cobol_rpg_filename.rsplit('.', 1)[0] if '.' in st.session_state.cobol_rpg_filename else st.session_state.cobol_rpg_filename
+            ext = "cbl" if st.session_state.cobol_rpg_target_language == "COBOL" else "rpgle"
+            c1, c2 = st.columns(2)
+            c1.download_button("💾 Code", result['converted_code'], f"{base}.{ext}", key="m8_dl1")
+            report = f"# CONVERSION {st.session_state.cobol_rpg_source_language}→{st.session_state.cobol_rpg_target_language}\n\n{result['explanation']}\n\n``````"
+            c2.download_button("📄 Rapport", report, f"{base}_report.md", key="m8_dl2")
+    
+    elif st.session_state.cobol_rpg_result and st.session_state.cobol_rpg_result.get('error'):
+        st.error(st.session_state.cobol_rpg_result['explanation'])
+
+
 # ===================== FOOTER PRO =====================
 st.markdown("""
 <div class="footer-pro">
@@ -4181,54 +4315,4 @@ header {visibility: hidden !important;}
 .st-emotion-cache {display: none !important;}
 </style>
 """
-
 st.markdown(HIDE_STREAMLIT, unsafe_allow_html=True)
-
-
-elif mode == TXTmodes8:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.header("Convertisseur COBOL ↔ RPG")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown('<div class="info-box">Ce mode traduit un code COBOL en code RPG et inversement.</div>', unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        source_lang = st.selectbox("Langage source", ["COBOL", "RPG"], key="cobolrpgsource")
-    with col2:
-        target_lang = "RPG" if source_lang == "COBOL" else "COBOL"
-        st.text_input("Langage cible", value=target_lang, disabled=True)
-
-    uploaded_file = st.file_uploader("Fichier source", type=['cbl', 'cob', 'rpg', 'txt'], key="cobolrpgfile")
-    if uploaded_file:
-        st.success(f"Fichier chargé : {uploaded_file.name}")
-        try:
-            source_code = uploaded_file.read().decode("utf-8", errors="ignore")
-        except Exception as e:
-            st.error(f"Erreur de lecture : {e}")
-            st.stop()
-
-        if st.button("Générer la traduction", use_container_width=True):
-            client = llm_client(max_tokens=3000, temperature=0.3)
-            if not client:
-                st.error("Client LLM indisponible.")
-            else:
-                with st.spinner("Traduction en cours..."):
-                    prompt = f"""Tu es un expert en conversion de langages mainframe.
-                    Convertis le code suivant écrit en {source_lang} vers {target_lang}.
-                    Le code doit être fonctionnel, commenté et respecter les conventions standard.
-                    
-                    CODE SOURCE :
-                    {source_code}
-                    """
-                    try:
-                        response = client.invoke(prompt)
-                        st.session_state.cobolrpgresult = response.content if hasattr(response, "content") else str(response)
-                    except Exception as e:
-                        st.error(f"Erreur du modèle : {e}")
-                        st.session_state.cobolrpgresult = None
-    if st.session_state.cobolrpgresult:
-        st.subheader(f"Code {target_lang} généré")
-        st.code(st.session_state.cobolrpgresult, language="rpg" if target_lang == "RPG" else "cobol")
-        st.download_button("Télécharger le résultat", data=st.session_state.cobolrpgresult.encode("utf-8"),
-                           file_name=f"conversion_{target_lang.lower()}.txt", use_container_width=True)
