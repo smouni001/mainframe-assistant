@@ -1482,39 +1482,93 @@ mode = st.sidebar.radio(
     help=T("Sélectionnez le mode de traitement souhaité", "Select your processing mode")
 )
 # ===================== MODE 8: COBOL ↔ RPG CONVERSION =====================
-def convert_cobol_rpg_with_llm(source_code: str, source_lang: str, target_lang: str, api_key: str) -> dict:
-    """Convertit COBOL vers RPG ou vice-versa avec explications."""
-    if not CLAUDE_AVAILABLE or not api_key:
-        return {'converted_code': None, 'explanation': "❌ Claude API requise", 'error': True}
+# ===================== MODE 8: COBOL ↔ RPG CONVERSION FUNCTION =====================
+# ===================== MODE 8: COBOL ↔ RPG CONVERSION FUNCTION =====================
+# ===================== MODE 8: COBOL ↔ RPG CONVERSION FUNCTION =====================
+def convert_cobol_rpg_with_llm(source_code, source_lang, target_lang, api_key):
+    """Convertit COBOL vers RPG ou vice-versa avec code et explications séparés."""
+    import re
     
-    prompt = f"""Tu es un expert mainframe. Convertis ce code {source_lang} vers {target_lang}.
+    if not CLAUDE_AVAILABLE or not api_key:
+        return {
+            'converted_code': None,
+            'explanation': "Claude API requise",
+            'raw_code': None,
+            'error': True
+        }
+    
+    # Créer le prompt
+    prompt = """Expert mainframe: Convertis """ + source_lang + """ vers """ + target_lang + """.
 
 CODE SOURCE:
+""" + source_code + """
 
 INSTRUCTIONS:
-1. Conversion complète et fidèle
-2. Standards: COBOL (DIVISION, PIC) / RPG (D-spec, F-spec)
-3. Correspondances: types, structures, fichiers, logique
-4. Explications détaillées de chaque transformation
+1. Code """ + target_lang + """ COMPLET et COMPILABLE
+2. SANS commentaires d'explication
+3. Syntaxe """ + target_lang + """ standard
+4. Logique métier exacte
 
 FORMAT:
-### CODE CONVERTI
-### EXPLICATIONS
-[détails de conversion]"""
 
+### CODE CONVERTI
+Code pur compilable ici
+
+### EXPLICATIONS
+Détails techniques ici
+
+GÉNÈRE MAINTENANT."""
+    
     try:
-        llm = ChatAnthropic(model="claude-3-5-sonnet-20241022", api_key=api_key, temperature=0.1, max_tokens=8000)
+        llm = ChatAnthropic(
+            model="claude-3-haiku-20240307",
+            api_key=api_key,
+            temperature=0.1,
+            max_tokens=4000
+        )
+        
         response = llm.invoke(prompt)
         full_response = response.content
         
-        import re
-        pattern = r'``````'
-        match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
-        converted_code = match.group(1).strip() if match else full_response[:2000]
+        # Extraire le code
+        target_lower = target_lang.lower()
+        pattern1 = r'``````'
+        pattern2 = r'``````'
+        pattern3 = r'``````'
+        pattern4 = r'``````'
+        pattern5 = r'``````'
         
-        return {'converted_code': converted_code, 'explanation': full_response, 'error': False}
+        code_match = None
+        for pattern in [pattern1, pattern2, pattern3, pattern4, pattern5]:
+            code_match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
+            if code_match:
+                break
+        
+        if code_match:
+            raw_code = code_match.group(1).strip()
+            explanation_start = code_match.end()
+            explanation = full_response[explanation_start:].strip()
+        else:
+            raw_code = full_response[:2000]
+            explanation = full_response
+        
+        if not explanation or len(explanation) < 50:
+            explanation = full_response
+        
+        return {
+            'converted_code': full_response,
+            'explanation': explanation,
+            'raw_code': raw_code,
+            'error': False
+        }
+        
     except Exception as e:
-        return {'converted_code': None, 'explanation': f"❌ Erreur: {str(e)}", 'error': True}
+        return {
+            'converted_code': None,
+            'explanation': "Erreur: " + str(e),
+            'raw_code': None,
+            'error': True
+        }
 
 
 # ===================== MODE 1 : ANALYSE DOC =====================
@@ -2929,14 +2983,14 @@ FIN DU DOCUMENT
 elif mode == TXT["modes"][5]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.header("📊 " + T(
-        "Extraction de Règles de Gestion - Code Legacy", 
-        "Business Rules Extraction - Legacy Code"
+        "Extraction de Règles de Gestion", 
+        "Business Rules Extraction "
     ))
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("""
     <div class="info-box">
-        🎯 <strong>Mode Expert Analyse Legacy</strong><br>
+        🎯 <strong>Extraction Régles de Gestion </strong><br>
         Extrayez les règles de gestion depuis du code mainframe :<br>
         • ✅ Analyse complète COBOL/PL/I/Assembler<br>
         • ✅ Dictionnaire de données automatique<br>
@@ -2950,7 +3004,7 @@ elif mode == TXT["modes"][5]:
 
     # Upload du fichier source
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.subheader("📂 " + T("Fichier Source Legacy", "Legacy Source File"))
+    st.subheader("📂 " + T("Fichier Source", "Source File"))
     
     uploaded_legacy = st.file_uploader(
         "📄 " + T("Programme COBOL/PL/I/ASM", "COBOL/PL/I/ASM Program"),
@@ -4192,16 +4246,21 @@ RECOMMANDATIONS PRIORITAIRES:
 # ===================== MODE 8 : CONVERSION COBOL ↔ RPG =====================
 elif mode == TXT["modes"][7]:
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.header("⚡ " + T("Conversion COBOL ↔ RPG", "COBOL ↔ RPG Conversion"))
+    st.header("⚡ " + T("Conversion Mainframe ↔ RPG(IBM i)", "COBOL ↔ RPG Conversion"))
     st.markdown('</div>', unsafe_allow_html=True)
     
     st.info("🔄 " + T("Conversion bidirectionnelle avec explications", "Bidirectional conversion with explanations"))
     
     col1, col2 = st.columns(2)
     with col1:
-        source_language = st.selectbox("📥 " + T("Source", "Source"), ["COBOL", "RPG"])
+        source_language = st.selectbox("📥 " + T("Source", "Source"), ["COBOL", "RPG","PLI",'ASM'])
+
     with col2:
         target_language = "RPG" if source_language == "COBOL" else "COBOL"
+        #st.selectbox("📤 " + T("Cible", "Target"), [target_language], disabled=False)
+        #target_language = st.selectbox("📥 " + T("Cible", "Target"), ["RPG", "COBOL","PLI",'ASM'])
+        #if source_language == "RPG" :target_language == "COBOL"
+    
         st.selectbox("📤 " + T("Cible", "Target"), [target_language], disabled=True)
     
     st.markdown("---")
@@ -4212,7 +4271,7 @@ elif mode == TXT["modes"][7]:
     uploaded_filename = None
     
     if T("Fichier", "File") in input_method:
-        uploaded_file = st.file_uploader("📂", type=["cbl", "cob", "rpg", "rpgle", "txt"], key="m8_file")
+        uploaded_file = st.file_uploader("📂", type=["cbl", "cob", "rpg", "rpgle", "txt","pli"], key="m8_file")
         if uploaded_file:
             source_code = uploaded_file.read().decode('utf-8', errors='ignore')
             uploaded_filename = uploaded_file.name
