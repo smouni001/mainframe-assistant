@@ -1441,6 +1441,637 @@ class MainframeReverseEngineer:
             'risk_assessment': 'HIGH' if len(impacted) > 10 else 'MEDIUM' if len(impacted) > 3 else 'LOW'
         }
 
+def generate_springboot_migration(program_info, api_key: str, source_code: str = None, include_tests: bool = True) -> dict:
+    """
+    Génère une migration complète vers Java Spring Boot en analysant le code source COBOL.
+    
+    Args:
+        program_info: Métadonnées du programme
+        api_key: Clé API Anthropic
+        source_code: Code source COBOL complet (OBLIGATOIRE pour une migration de qualité)
+        include_tests: Générer les tests unitaires
+    """
+    result = {
+        "entity": None,
+        "repository": None,
+        "service": None,
+        "controller": None,
+        "dto": None,
+        "config": None,
+        "tests": None,
+        "pom": None,
+        "application_yml": None,
+        "migration_guide": None,
+        "error": True,
+        "warning": None
+    }
+    
+    if not CLAUDE_AVAILABLE or not api_key:
+        result["migration_guide"] = "LangChain Anthropic non disponible"
+        return result
+    
+    # VÉRIFICATION CRITIQUE : Le code source est-il fourni ?
+    if not source_code or len(source_code.strip()) < 100:
+        result["warning"] = "⚠️ Code source non fourni ou trop court. Génération générique utilisée."
+        result["error"] = False
+        # Génération minimale sans code source
+        result["migration_guide"] = f"""# ⚠️ ATTENTION : Migration Générique
+
+Le code source COBOL de {program_info.name} n'a pas été fourni.
+Cette migration est un template générique qui nécessite des ajustements manuels importants.
+
+**RECOMMANDATION**: Uploadez le code source COBOL complet pour une migration fidèle."""
+        return result
+    
+    try:
+        prog_name = program_info.name
+        
+        # Extraire les métadonnées
+        files_list = []
+        for attr in ['files_vsam', 'files_sequential', 'copybooks']:
+            if hasattr(program_info, attr):
+                attr_value = getattr(program_info, attr)
+                if attr_value:
+                    files_list.extend(list(attr_value) if isinstance(attr_value, (list, set, tuple)) else [])
+        
+        db2_list = list(program_info.db2_tables) if hasattr(program_info, 'db2_tables') and program_info.db2_tables else []
+        trans_list = list(program_info.transactions) if hasattr(program_info, 'transactions') and program_info.transactions else []
+        
+        # Limiter le code source à 15000 caractères pour le prompt (limite tokens)
+        code_sample = source_code[:15000] if len(source_code) > 15000 else source_code
+        
+        from langchain_anthropic import ChatAnthropic
+        llm = ChatAnthropic(
+            model="claude-3-5-sonnet-20241022",  # Modèle plus puissant pour analyse complexe
+            api_key=api_key,
+            temperature=0.1,
+            max_tokens=8000  # Augmenté pour code détaillé
+        )
+        
+        # ========== PROMPT MAÎTRE : ANALYSE COMPLÈTE ==========
+        master_analysis_prompt = f"""Tu es un architecte logiciel expert en migration mainframe vers Java Spring Boot.
+
+MISSION CRITIQUE : Analyser en profondeur le programme COBOL suivant et générer une architecture Spring Boot COMPLÈTE et FIDÈLE.
+
+📋 MÉTADONNÉES PROGRAMME :
+- Nom: {prog_name}
+- Lignes de code: {program_info.lines}
+- Fichiers utilisés: {', '.join(files_list[:10]) if files_list else 'Aucun'}
+- Tables DB2: {', '.join(db2_list[:10]) if db2_list else 'Aucune'}
+- Transactions CICS: {', '.join(trans_list) if trans_list else 'Aucune'}
+
+📝 CODE SOURCE COBOL COMPLET :
+{code_sample}
+
+🎯 INSTRUCTIONS D'ANALYSE :
+
+1. **ANALYSE STRUCTURELLE** :
+   - Identifier TOUTES les sections (IDENTIFICATION, ENVIRONMENT, DATA, PROCEDURE)
+   - Lister TOUS les fichiers déclarés (SELECT, FD)
+   - Extraire TOUS les WORKING-STORAGE items (variables, structures, 77, 01)
+   - Repérer TOUS les paragraphes et leur logique
+
+2. **ANALYSE MÉTIER** :
+   - Comprendre le flux de traitement principal
+   - Identifier les règles de calcul (COMPUTE, ADD, SUBTRACT, MULTIPLY, DIVIDE)
+   - Détecter les validations métier (IF conditions)
+   - Repérer les boucles (PERFORM UNTIL, VARYING)
+   - Identifier les appels externes (CALL, EXEC CICS, EXEC SQL)
+
+3. **MAPPING DONNÉES** :
+   - Mapper chaque structure de données COBOL vers une classe Java
+   - Convertir les types COBOL → Java (PIC X → String, PIC 9 → Integer/Long, PIC S9V99 → BigDecimal)
+   - Identifier les clés primaires et relations
+   - Repérer les REDEFINES et unions
+
+4. **ARCHITECTURE CIBLE** :
+   Tu vas générer une architecture Spring Boot multicouche :
+   
+   a) **Entities JPA** : Une entity par structure de données principale
+   b) **DTOs** : InputDTO et OutputDTO pour chaque opération métier
+   c) **Repository** : Méthodes de requêtage basées sur les SELECTs SQL et READs fichier
+   d) **Service** : Implémenter TOUTE la logique métier des paragraphes COBOL
+   e) **Controller** : API REST exposant les fonctionnalités
+
+Génère un JSON structuré avec ton analyse détaillée :
+{{
+  "entities": [
+    {{
+      "name": "NomEntity",
+      "source_cobol": "01 STRUCTURE-COBOL",
+      "fields": [
+        {{"name": "field1", "cobol_type": "PIC X(10)", "java_type": "String", "jpa_column": "FIELD1"}},
+        ...
+      ],
+      "primary_key": "id",
+      "table_name": "TABLE_DB2"
+    }}
+  ],
+  "business_logic": [
+    {{
+      "paragraph": "PROCESS-RECORDS",
+      "description": "Traite les enregistrements clients",
+      "steps": ["Lire fichier", "Valider données", "Calculer montant", "Écrire sortie"],
+      "java_method": "processRecords()"
+    }}
+  ],
+  "files_io": [
+    {{"file": "CLIENT-FILE", "mode": "INPUT", "entity": "ClientEntity"}},
+    {{"file": "OUTPUT-FILE", "mode": "OUTPUT", "entity": "OutputEntity"}}
+  ],
+  "validations": [
+    "Montant doit être > 0",
+    "Code client obligatoire",
+    ...
+  ],
+  "calculations": [
+    "TOTAL = MONTANT * QUANTITE",
+    "REMISE = TOTAL * 0.10 IF TOTAL > 1000"
+  ]
+}}"""
+
+        # APPEL 1 : Analyse maître
+        analysis_response = llm.invoke(master_analysis_prompt)
+        analysis_json = analysis_response.content
+        
+        # ========== GÉNÉRATION ENTITY ==========
+        entity_prompt = f"""Basé sur l'analyse suivante, génère les classes JPA Entity Spring Boot COMPLÈTES.
+
+ANALYSE :
+{analysis_json}
+
+CODE SOURCE COBOL :
+{code_sample[:5000]}
+
+INSTRUCTIONS :
+1. Créer une Entity Java par structure 01-level COBOL significative
+2. Mapper EXACTEMENT les champs COBOL vers Java avec les bons types :
+   - PIC X(n) → String
+   - PIC 9(n) → Integer (si n <= 9) ou Long (si n > 9)
+   - PIC S9(n)V9(m) → BigDecimal
+   - PIC S9(n) COMP-3 → BigDecimal
+3. Ajouter @Entity, @Table, @Column avec les noms exacts
+4. Utiliser Lombok (@Data, @NoArgsConstructor, @AllArgsConstructor)
+5. Ajouter validations Bean Validation appropriées
+6. Inclure @Id et @GeneratedValue si clé primaire détectée
+7. Ajouter commentaires expliquant l'origine COBOL
+
+Génère TOUTES les entities nécessaires (plusieurs classes si besoin).
+FORMAT : Code Java pur, prêt à compiler."""
+
+        entity_response = llm.invoke(entity_prompt)
+        result["entity"] = entity_response.content
+        
+        # ========== GÉNÉRATION DTOs ==========
+        dto_prompt = f"""Génère les DTOs (Data Transfer Objects) pour les échanges API.
+
+ANALYSE MÉTIER :
+{analysis_json}
+
+INSTRUCTIONS :
+1. Créer un InputDTO pour chaque opération métier identifiée
+2. Créer un OutputDTO pour les réponses
+3. Mapper les données des Working-Storage vers les DTOs
+4. Ajouter validations @NotNull, @Size, @Pattern selon les validations COBOL
+5. Utiliser Lombok et Swagger annotations
+6. Inclure des exemples de valeurs
+
+Génère TOUS les DTOs nécessaires."""
+
+        dto_response = llm.invoke(dto_prompt)
+        result["dto"] = dto_response.content
+        
+        # ========== GÉNÉRATION REPOSITORY ==========
+        repo_prompt = f"""Génère l'interface Repository Spring Data JPA.
+
+ENTITÉS :
+{result["entity"][:2000]}
+
+OPÉRATIONS FICHIER/DB2 DÉTECTÉES :
+{analysis_json[:3000]}
+
+INSTRUCTIONS :
+1. Créer un Repository par Entity
+2. Ajouter méthodes de recherche basées sur les READ, CHAIN, SETLL COBOL détectés
+3. Implémenter requêtes custom avec @Query pour logique SQL EXEC
+4. Ajouter méthodes de pagination si boucles PERFORM détectées
+5. Documenter chaque méthode avec son équivalent COBOL
+
+Génère les interfaces Repository complètes."""
+
+        repo_response = llm.invoke(repo_prompt)
+        result["repository"] = repo_response.content
+        
+        # ========== GÉNÉRATION SERVICE (CRITIQUE) ==========
+        service_prompt = f"""🔥 GÉNÉRATION DU SERVICE - LOGIQUE MÉTIER COMPLÈTE 🔥
+
+Tu dois implémenter TOUTE la logique métier du programme COBOL en Java.
+
+CODE COBOL COMPLET :
+{code_sample}
+
+ANALYSE MÉTIER :
+{analysis_json}
+
+INSTRUCTIONS CRITIQUES :
+1. **POUR CHAQUE PARAGRAPHE COBOL**, créer une méthode Java correspondante
+2. **IMPLÉMENTER TOUTES LES RÈGLES DE CALCUL** :
+   - COMPUTE X = Y + Z → x = y + z;
+   - IF conditions → if/else Java
+   - PERFORM loops → for/while Java
+   - EVALUATE → switch Java
+
+3. **GÉRER TOUS LES FICHIERS/DB2** :
+   - READ FILE → repository.findById()
+   - WRITE FILE → repository.save()
+   - EXEC SQL SELECT → @Query custom
+
+4. **PRÉSERVER LA LOGIQUE** :
+   - Même ordre de traitement
+   - Mêmes validations
+   - Mêmes calculs
+   - Gestion d'erreurs équivalente
+
+5. **AJOUTER** :
+   - @Service
+   - @Transactional sur méthodes écrivant en base
+   - Logger (SLF4J) pour traçabilité
+   - Gestion exceptions métier
+
+6. **COMMENTER ABONDAMMENT** :
+   - Origine de chaque méthode (paragraphe COBOL)
+   - Explication des calculs complexes
+   - TODO pour validations manquantes
+
+GÉNÈRE un Service Java COMPLET, FIDÈLE au COBOL, PRÊT POUR PRODUCTION."""
+
+        service_response = llm.invoke(service_prompt)
+        result["service"] = service_response.content
+        
+        # ========== GÉNÉRATION CONTROLLER ==========
+        controller_prompt = f"""Génère le Controller REST exposant les fonctionnalités du Service.
+
+SERVICE GÉNÉRÉ :
+{result["service"][:3000]}
+
+TRANSACTIONS CICS : {', '.join(trans_list) if trans_list else 'Aucune'}
+
+INSTRUCTIONS :
+1. @RestController avec @RequestMapping("/api/v1/{prog_name.lower()}")
+2. Exposer chaque méthode publique du Service comme endpoint REST
+3. Mapper transactions CICS vers endpoints POST/GET appropriés
+4. Ajouter @Valid pour validation
+5. Gérer ResponseEntity avec codes HTTP (200, 400, 500)
+6. Documentation Swagger complète (@Operation, @ApiResponse)
+7. Gestion d'erreurs avec @ExceptionHandler
+
+Génère Controller complet."""
+
+        controller_response = llm.invoke(controller_prompt)
+        result["controller"] = controller_response.content
+        
+        # ========== GÉNÉRATION CONFIG ==========
+        result["config"] = f"""package com.migration.config;
+
+import org.springframework.context.annotation.*;
+import org.springframework.transaction.annotation.EnableTransactionManagement;
+import io.swagger.v3.oas.models.OpenAPI;
+import io.swagger.v3.oas.models.info.Info;
+import io.swagger.v3.oas.models.info.Contact;
+
+/**
+ * Configuration Spring Boot pour la migration de {prog_name}
+ * Généré depuis le programme COBOL mainframe
+ */
+@Configuration
+@EnableTransactionManagement
+public class ApplicationConfig {{
+    
+    @Bean
+    public OpenAPI customOpenAPI() {{
+        return new OpenAPI()
+            .info(new Info()
+                .title("API {prog_name}")
+                .version("1.0.0")
+                .description("Migration mainframe vers Spring Boot")
+                .contact(new Contact()
+                    .name("Équipe Migration")
+                    .email("migration@company.com")));
+    }}
+    
+    /**
+     * Configuration du pool de connexions DB2
+     */
+    @Bean
+    public DataSourceProperties dataSourceProperties() {{
+        DataSourceProperties properties = new DataSourceProperties();
+        properties.setDriverClassName("com.ibm.db2.jcc.DB2Driver");
+        return properties;
+    }}
+}}"""
+        
+        # ========== GÉNÉRATION TESTS ==========
+        if include_tests:
+            test_prompt = f"""Génère les tests unitaires JUnit 5 + Mockito pour le Service.
+
+SERVICE À TESTER :
+{result["service"][:4000]}
+
+INSTRUCTIONS :
+1. @SpringBootTest ou @ExtendWith(MockitoExtension.class)
+2. Tester CHAQUE méthode publique du Service
+3. Cas nominal ET cas d'erreur
+4. Mocker les dépendances (Repository)
+5. AssertJ pour assertions
+6. Coverage > 80%
+7. Nommer tests : should_Xxx_When_Yyy()
+
+Génère classe de tests complète."""
+
+            test_response = llm.invoke(test_prompt)
+            result["tests"] = test_response.content
+        
+        # ========== POM.XML ==========
+        result["pom"] = f"""<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    
+    <groupId>com.migration</groupId>
+    <artifactId>{prog_name.lower()}-service</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    
+    <name>{prog_name} Service</name>
+    <description>Migration Spring Boot du programme mainframe {prog_name}</description>
+    
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+    </parent>
+    
+    <properties>
+        <java.version>17</java.version>
+        <springdoc.version>2.3.0</springdoc.version>
+        <db2.version>11.5.8.0</db2.version>
+    </properties>
+    
+    <dependencies>
+        <!-- Spring Boot Starters -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        
+        <!-- Database DB2 -->
+        <dependency>
+            <groupId>com.ibm.db2</groupId>
+            <artifactId>jcc</artifactId>
+            <version>${{db2.version}}</version>
+        </dependency>
+        
+        <!-- Lombok -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+        
+        <!-- OpenAPI/Swagger -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>${{springdoc.version}}</version>
+        </dependency>
+        
+        <!-- MapStruct pour mapping DTO/Entity -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>1.5.5.Final</version>
+        </dependency>
+        
+        <!-- Tests -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.mockito</groupId>
+            <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+            
+            <!-- Jacoco pour coverage -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.10</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>"""
+        
+        # ========== APPLICATION.YML ==========
+        db2_tables_str = ', '.join(db2_list[:5]) if db2_list else 'N/A'
+        result["application_yml"] = f"""# Configuration Spring Boot - Migration {prog_name}
+# Généré automatiquement depuis le programme COBOL mainframe
+
+spring:
+  application:
+    name: {prog_name.lower()}-service
+  
+  # Base de données DB2
+  datasource:
+    url: jdbc:db2://mainframe-host:50000/DB2PROD
+    username: ${{DB_USER:COBOLUSER}}
+    password: ${{DB_PASSWORD}}
+    driver-class-name: com.ibm.db2.jcc.DB2Driver
+    
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      pool-name: {prog_name}Pool
+  
+  # JPA/Hibernate
+  jpa:
+    database-platform: org.hibernate.dialect.DB2Dialect
+    hibernate:
+      ddl-auto: validate  # IMPORTANT: Ne jamais utiliser 'update' ou 'create' en production
+      naming:
+        physical-strategy: org.hibernate.boot.model.naming.PhysicalNamingStrategyStandardImpl
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 20
+          fetch_size: 50
+        order_inserts: true
+        order_updates: true
+        query:
+          in_clause_parameter_padding: true
+  
+  # OpenAPI/Swagger
+  springdoc:
+    api-docs:
+      path: /api-docs
+      enabled: true
+    swagger-ui:
+      path: /swagger-ui.html
+      enabled: true
+      operations-sorter: method
+      tags-sorter: alpha
+    show-actuator: true
+
+# Actuator Monitoring
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.migration: DEBUG
+    org.springframework.web: INFO
+    org.springframework.data: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{{yyyy-MM-dd HH:mm:ss}} - %msg%n"
+    file: "%d{{yyyy-MM-dd HH:mm:ss}} [%thread] %-5level %logger{{36}} - %msg%n"
+  file:
+    name: logs/{prog_name.lower()}-service.log
+
+# Configuration métier spécifique à {prog_name}
+app:
+  migration:
+    source-program: {prog_name}
+    cobol-version: "COBOL-85"
+    mainframe-host: mainframe-host
+    batch-size: 1000
+    retry-attempts: 3
+    timeout-seconds: 300
+    
+  # Tables DB2 utilisées
+  database:
+    tables: [{db2_tables_str}]
+    
+  # Fichiers VSAM migrés
+  files:
+    input: {', '.join(files_list[:3]) if files_list else 'N/A'}
+"""
+        
+        # ========== GUIDE MIGRATION ==========
+        guide_prompt = f"""Génère un guide de migration complet en Markdown.
+
+PROGRAMME : {prog_name}
+CODE SOURCE :
+{code_sample[:3000]}
+
+ANALYSE :
+{analysis_json[:2000]}
+
+INSTRUCTIONS :
+Créer un document Markdown professionnel avec :
+1. Vue d'ensemble de la migration
+2. Mapping détaillé COBOL → Java (tableau comparatif)
+3. Architecture technique Spring Boot
+4. Points d'attention et défis identifiés
+5. Plan de test et validation (avec cas de test)
+6. Procédure de déploiement
+7. Stratégie de rollback
+8. Checklist de mise en production
+9. Performance considerations
+10. Maintenance et évolution
+
+FORMAT: Markdown très détaillé, professionnel."""
+
+        guide_response = llm.invoke(guide_prompt)
+        result["migration_guide"] = guide_response.content
+        
+        result["error"] = False
+        
+    except Exception as e:
+        result["migration_guide"] = f"""# ❌ Erreur de génération
+
+Une erreur s'est produite lors de la génération de la migration :
+{str(e)}
+
+**Actions recommandées** :
+1. Vérifier que le code source COBOL est valide
+2. Vérifier la clé API Anthropic
+3. Réessayer avec un code source plus court si > 15000 caractères
+"""
+        result["error"] = False  # On retourne quand même le message d'erreur
+    
+    return result
+
 # ===================== UI LABELS =====================
 # ===================== UI LABELS =====================
 TEXTS = {
@@ -1485,90 +2116,338 @@ mode = st.sidebar.radio(
 # ===================== MODE 8: COBOL ↔ RPG CONVERSION FUNCTION =====================
 # ===================== MODE 8: COBOL ↔ RPG CONVERSION FUNCTION =====================
 # ===================== MODE 8: COBOL ↔ RPG CONVERSION FUNCTION =====================
-def convert_cobol_rpg_with_llm(source_code, source_lang, target_lang, api_key):
-    """Convertit COBOL vers RPG ou vice-versa avec code et explications séparés."""
+def convertcobolrpgwithllm(sourcecode: str, source_lang: str, target_lang: str, api_key: str, rpg_type: Optional[str] = None) -> dict:
+    """Convertit du code mainframe ou pseudo-code vers un langage cible avec prompts optimisés."""
     import re
+    result = {"converted_code": None, "explanation": "Fonction appelée", "raw_code": None, "error": True}
     
-    if not CLAUDE_AVAILABLE or not api_key:
-        return {
-            'converted_code': None,
-            'explanation': "Claude API requise",
-            'raw_code': None,
-            'error': True
-        }
+    if not CLAUDE_AVAILABLE:
+        result["explanation"] = "LangChain Anthropic non disponible - pip install langchain-anthropic"
+        return result
     
-    # Créer le prompt
-    prompt = """Expert mainframe: Convertis """ + source_lang + """ vers """ + target_lang + """.
+    if not api_key:
+        result["explanation"] = "API key vide"
+        return result
 
-CODE SOURCE:
-""" + source_code + """
+    # Construction du prompt selon le type RPG cible
+    if target_lang == 'RPG' and rpg_type:
+        if "Full Free" in rpg_type:
+            # FULL FREE RPG - Format moderne
+            prompt = f"""Tu es un expert en RPG Free Format (ILE RPG).
 
-INSTRUCTIONS:
-1. Code """ + target_lang + """ COMPLET et COMPILABLE
-2. SANS commentaires d'explication
-3. Syntaxe """ + target_lang + """ standard
-4. Logique métier exacte
+MISSION : Convertir le code {source_lang} suivant en RPG FULL FREE FORMAT moderne, compilable et prêt pour la production.
 
-FORMAT:
+CODE SOURCE ({source_lang}) :
+{sourcecode[:2500]}
 
-### CODE CONVERTI
-Code pur compilable ici
+INSTRUCTIONS STRICTES - RPG FULL FREE FORMAT :
 
-### EXPLICATIONS
-Détails techniques ici
+1. STRUCTURE COMPLÈTE :
+**Control-opt** (en haut) :
+   CTL-OPT DFTACTGRP(*NO) ACTGRP(*NEW) OPTION(*SRCSTMT:*NODEBUGIO);
 
-GÉNÈRE MAINTENANT."""
+**Declarations** (DCL-) :
+   - DCL-F pour les fichiers
+   - DCL-S pour les variables standalone
+   - DCL-DS pour les structures de données
+   - DCL-C pour les constantes
+   - DCL-PR pour les prototypes
+   - DCL-PI pour les interfaces de procédure
+
+**Calculs** (logique métier) :
+   - Utiliser IF/ELSE/ENDIF au lieu de IFxx
+   - Utiliser FOR/ENDFOR au lieu de DOWxx
+   - EVAL n'est pas nécessaire en free format
+   - Terminer chaque instruction par un point-virgule (;)
+
+**Procédures** (si applicable) :
+   - DCL-PROC pour déclarer
+   - END-PROC pour terminer
+
+2. SYNTAXE FREE FORMAT MODERNE :
+   - Pas de colonnes fixes
+   - Pas de Cxx, Dxx dans la marge
+   - Variables avec types explicites : INT(10), PACKED(7:2), CHAR(50), etc.
+   - Opérations en minuscules de préférence (dsply, chain, read, etc.)
+   - Noms de variables descriptifs
+
+3. EXEMPLES DE SYNTAXE :
+// Déclaration fichier
+DCL-F CUSTOMER USAGE(*INPUT) KEYED;
+
+// Variables
+DCL-S customerName VARCHAR(50);
+DCL-S totalAmount PACKED(11:2) INZ(0);
+DCL-S counter INT(10);
+
+// Constantes
+DCL-C MAX_RECORDS 1000;
+
+// Structure
+DCL-DS customerRec;
+custId INT(10);
+custName CHAR(30);
+balance PACKED(9:2);
+END-DS;
+
+// Logique
+IF customerName <> '';
+totalAmount += balance;
+ENDIF;
+
+FOR counter = 1 TO 10;
+dsply ('Iteration: ' + %CHAR(counter));
+ENDFOR;
+
+
+
+4. FICHIERS :
+- DCL-F avec USAGE(*INPUT/*OUTPUT/*UPDATE)
+- Opérations : READ, CHAIN, WRITE, UPDATE, DELETE
+- Indicateurs : %EOF, %FOUND, %ERROR
+
+5. CODE COMPILABLE :
+- Toutes les variables déclarées
+- Logique métier complète
+- Gestion d'erreurs avec MONITOR/ON-ERROR si nécessaire
+- *INLR = *ON; à la fin du programme principal
+
+FORMAT DE RÉPONSE :
+<CONVERTED_CODE>
+**ctl-opt DFTACTGRP(*NO) ACTGRP(*NEW);
+
+// Déclarations de fichiers
+DCL-F ...;
+
+// Variables et constantes
+DCL-S ...;
+DCL-C ...;
+
+// Structures de données
+DCL-DS ...;
+END-DS;
+
+// === LOGIQUE PRINCIPALE ===
+// Code ici avec IF/FOR/DOW/etc.
+
+*INLR = *ON;
+RETURN;
+</CONVERTED_CODE>
+
+<EXPLANATIONS>
+- Décisions de conception
+- Variables créées et leur rôle
+- Structures de données utilisées
+- Logique métier implémentée
+- Points d'attention
+</EXPLANATIONS>"""
+
+        elif "IV" in rpg_type:
+          # RPG IV - Format mixte
+          prompt = f"""Tu es un expert en RPG IV (format mixte fixed+free).
+
+MISSION : Convertir le code {source_lang} suivant en RPG IV avec format MIXTE (fixed pour specs, free pour calculs).
+
+CODE SOURCE ({source_lang}) :
+{sourcecode[:2500]}
+
+INSTRUCTIONS STRICTES - RPG IV FORMAT MIXTE :
+
+1. STRUCTURE :
+- **H-specs** (colonnes 6-80) : DFTACTGRP(*NO) ACTGRP(*CALLER)
+- **F-specs** (colonnes 7-74) : Définitions fichiers
+- **D-specs** (colonnes 7-80) : Définitions données
+- **C-specs FREE FORMAT** (à partir colonne 8) : Logique
+
+2. SPECS FICHIERS (F) :
+FCUSTOMER IF E K DISK
+FINVOICE UF A E K DISK
+
+
+
+3. SPECS DONNÉES (D) :
+D custName S 50A VARYING
+D totalAmt S 11P 2 INZ(0)
+D counter S 10I 0
+
+D customerDS DS QUALIFIED
+D id 10I 0
+D name 30A
+D balance 9P 2
+
+
+
+4. CALCULS FREE FORMAT (C) :
+/FREE
+IF custName <> '';
+totalAmt += balance;
+ENDIF;
+
+
+ FOR counter = 1 TO 10;
+   dsply ('Count: ' + %CHAR(counter));
+ ENDFOR;
+ 
+ *INLR = *ON;
+/END-FREE
+
+
+
+5. OPÉRATIONS COURANTES :
+- Lecture : READ, CHAIN, SETLL/READE
+- Écriture : WRITE, UPDATE, DELETE
+- Indicateurs : %EOF(), %FOUND(), %ERROR()
+- Built-in functions : %TRIM(), %SUBST(), %CHAR(), %DEC()
+
+FORMAT DE RÉPONSE :
+<CONVERTED_CODE>
+  H DFTACTGRP(*NO) ACTGRP(*CALLER)
+  
+  F* Fichiers
+  FCUSTFILE  IF   E           K DISK
+  
+  D* Variables
+  D varName         S             30A
+  
+  C/FREE
+    // Logique en free format
+    IF condition;
+      // traitement
+    ENDIF;
     
-    try:
-        llm = ChatAnthropic(
-            model="claude-3-haiku-20240307",
-            api_key=api_key,
-            temperature=0.1,
-            max_tokens=4000
-        )
-        
-        response = llm.invoke(prompt)
-        full_response = response.content
-        
-        # Extraire le code
-        target_lower = target_lang.lower()
-        pattern1 = r'``````'
-        pattern2 = r'``````'
-        pattern3 = r'``````'
-        pattern4 = r'``````'
-        pattern5 = r'``````'
-        
-        code_match = None
-        for pattern in [pattern1, pattern2, pattern3, pattern4, pattern5]:
-            code_match = re.search(pattern, full_response, re.DOTALL | re.IGNORECASE)
-            if code_match:
-                break
-        
-        if code_match:
-            raw_code = code_match.group(1).strip()
-            explanation_start = code_match.end()
-            explanation = full_response[explanation_start:].strip()
+    *INLR = *ON;
+  C/END-FREE
+</CONVERTED_CODE>
+
+<EXPLANATIONS>
+- Structure du programme
+- Variables et fichiers
+- Logique implémentée
+</EXPLANATIONS>"""
+
         else:
-            raw_code = full_response[:2000]
-            explanation = full_response
-        
-        if not explanation or len(explanation) < 50:
-            explanation = full_response
-        
-        return {
-            'converted_code': full_response,
-            'explanation': explanation,
-            'raw_code': raw_code,
-            'error': False
-        }
-        
+          # RPG Classique - Format fixe
+          prompt = f"""Tu es un expert en RPG classique (format fixe colonné).
+
+MISSION : Convertir le code {source_lang} suivant en RPG CLASSIQUE avec format FIXE strict.
+
+CODE SOURCE ({source_lang}) :
+{sourcecode[:2500]}
+
+INSTRUCTIONS STRICTES - RPG FORMAT FIXE :
+
+1. COLONNES STRICTES :
+- Position 6 : Type de spec (H/F/D/I/C/O)
+- Positions 7-80 : Code selon type de spec
+- C-specs : Factor1 (12-25), OpCode (26-35), Factor2 (36-49), Result (50-63)
+
+2. STRUCTURE :
+H* Control specs
+HDFTACTGRP(*NO)
+
+F* File specs
+FCUSTFILE IP E DISK
+
+D* Définitions
+D CUSTNAME S 50A
+D TOTAMT S 11P 2
+
+C* Calculs
+C READ CUSTFILE
+C IF %EOF
+C LEAVE
+C ENDIF
+C EVAL TOTAMT = TOTAMT + AMT
+C SETON LR
+
+
+
+3. OPÉRATIONS FIXES :
+- IF/DO/DOU/DOW avec ENDIF/ENDDO
+- EVAL pour assignations
+- Indicateurs : *IN01-*IN99, LR, etc.
+
+FORMAT DE RÉPONSE :
+<CONVERTED_CODE>
+  H* Programme RPG classique
+  HDFTACTGRP(*NO)
+  F* Fichiers
+  FCUSTFILE  IP   E             DISK
+  D* Variables
+  D VARNAME         S             30A
+  C* Logique
+  C                   READ      CUSTFILE
+  C                   SETON                                        LR
+</CONVERTED_CODE>
+
+<EXPLANATIONS>
+- Structure colonnes
+- Variables et indicateurs
+- Logique métier
+</EXPLANATIONS>"""
+ 
+    else:
+         # Pour COBOL, PLI, ASM (prompt générique amélioré)
+         prompt = f"""Tu es un expert mainframe multi-langages.
+
+MISSION : Convertir le code {source_lang} suivant vers {target_lang} de manière professionnelle et compilable.
+
+CODE SOURCE ({source_lang}) :
+{sourcecode[:2500]}
+
+INSTRUCTIONS :
+1. Génère un programme {target_lang} COMPLET et COMPILABLE
+2. Structure professionnelle avec toutes les sections nécessaires
+3. Variables correctement typées
+4. Logique métier fidèle à la source
+5. Respect strict de la syntaxe {target_lang}
+6. Code prêt pour la production
+
+FORMAT :
+<CONVERTED_CODE>
+[Code {target_lang} complet]
+</CONVERTED_CODE>
+
+<EXPLANATIONS>
+[Explications détaillées]
+</EXPLANATIONS>"""
+
+   # Appel au LLM
+    try:
+       from langchain_anthropic import ChatAnthropic
+       llm = ChatAnthropic(
+              model="claude-3-haiku-20240307", 
+              api_key=api_key, 
+              temperature=0.1, 
+              max_tokens=4000  # Augmenté pour code plus complet
+       )
+       response = llm.invoke(prompt)
+       full_response = response.content
+       result["converted_code"] = full_response
+
+       # Extraction avec correction des balises
+       code_match = re.search(r'<CONVERTED_CODE>([\s\S]*?)</CONVERTED_CODE>', full_response, re.DOTALL | re.IGNORECASE)
+       if code_match:
+           raw_code = code_match.group(1).strip()
+         
+           explanation_match = re.search(r'<EXPLANATIONS>([\s\S]*?)</EXPLANATIONS>', full_response, re.DOTALL | re.IGNORECASE)
+           explanation = explanation_match.group(1).strip() if explanation_match else "Explications non disponibles."
+       else:
+           raw_code = full_response[:2000]
+           explanation = "Format de réponse non conforme - code brut retourné."
+
+       result["raw_code"] = raw_code
+       result["explanation"] = explanation
+       result["error"] = False
+
+    except ImportError as e:
+       result["explanation"] = f"Import error: {str(e)} - Installez langchain-anthropic"
     except Exception as e:
-        return {
-            'converted_code': None,
-            'explanation': "Erreur: " + str(e),
-            'raw_code': None,
-            'error': True
-        }
+       result["explanation"] = f"LLM error: {str(e)} - Vérifiez clé API et réseau"
+ 
+    return result
+
+
 
 
 # ===================== MODE 1 : ANALYSE DOC =====================
@@ -3924,31 +4803,276 @@ RECOMMANDATIONS PRIORITAIRES:
                 pass
 
         # TAB 2 : PROGRAMMES
+        # TAB 2 PROGRAMMES  
+        # TAB 2 PROGRAMMES  
         with tab2:
             st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-            st.subheader("📘 Inventaire Programmes")
+            st.subheader("Inventaire Programmes")
             
             if analyzer.programs:
-                df_programs = pd.DataFrame([
-                    {
-                        'Nom': p.name,
-                        'Type': p.component_type.value.replace('COBOL_', ''),
-                        'Lignes': p.lines,
-                        'Paragraphes': p.paragraphs,
-                        'Complexité': p.complexity_score,
-                        'Risque': p.risk_level,
-                        'Appelé par': len(p.called_by),
-                        'Appelle': len(p.calls_to),
-                        'Orphelin': '🚫' if p.is_orphan else '',
-                        'Critique': '⚠️' if p.is_critical else '',
-                        'CICS': '✓' if p.calls_cics else '',
-                        'DB2': len(p.db2_tables) if p.db2_tables else '',
-                        'IA': '🤖' if p.name in llm_analyses else ''
+                # Construction du DataFrame avec gestion des types
+                df_data = []
+                for p in analyzer.programs.values():
+                    # Récupérer le nombre de tables DB2 de manière sécurisée
+                    db2_count = 0
+                    if hasattr(p, 'db2_tables') and p.db2_tables:
+                        db2_count = len(p.db2_tables)
+                    
+                    # Récupérer les autres attributs de manière sécurisée
+                    row = {
+                        "Nom": p.name,
+                        "Type": p.component_type.value.replace("COBOL_", "") if hasattr(p.component_type, 'value') else str(p.component_type).replace("COBOL_", ""),
+                        "Lignes": int(p.lines),
+                        "Paragraphes": int(p.paragraphs) if hasattr(p, 'paragraphs') else 0,
+                        "Complexité": int(p.complexity_score) if hasattr(p, 'complexity_score') else 0,
+                        "Risque": p.risk_level if hasattr(p, 'risk_level') else "N/A",
+                        "Appelé par": len(p.called_by) if hasattr(p, 'called_by') else 0,
+                        "Appelle": len(p.calls_to) if hasattr(p, 'calls_to') else 0,
+                        "Orphelin": "⚠️" if getattr(p, 'is_orphan', False) else "",
+                        "Critique": "🔴" if getattr(p, 'is_critical', False) else "",
+                        "CICS": "✓" if getattr(p, 'calls_cics', False) else "",
+                        "DB2": db2_count,  # Nombre entier au lieu de chaîne vide
+                        "IA": "✓" if p.name in llm_analyses else "",
                     }
-                    for p in analyzer.programs.values()
-                ])
+                    df_data.append(row)
                 
-                st.dataframe(df_programs.sort_values('Complexité', ascending=False), use_container_width=True, height=500)
+                df_programs = pd.DataFrame(df_data)
+                
+                # Affichage du DataFrame
+                st.dataframe(
+                    df_programs.sort_values("Complexité", ascending=False),
+                    use_container_width=True,
+                    height=500
+                )
+                
+                # ===== SECTION MIGRATION SPRING BOOT =====
+                st.markdown("---")
+                st.markdown("### 🚀 Migration Java Spring Boot")
+                
+                col_migrate1, col_migrate2 = st.columns([3, 1])
+                
+                with col_migrate1:
+                    program_to_migrate = st.selectbox(
+                        "Sélectionnez un programme à migrer",
+                        options=sorted(analyzer.programs.keys()),
+                        key="springboot_migration_select"
+                    )
+                
+                with col_migrate2:
+                    include_tests_spring = st.checkbox("Inclure tests", value=True, key="include_tests_spring")
+                
+                if st.button("🔄 GÉNÉRER MIGRATION SPRING BOOT", use_container_width=True, key="migrate_springboot_btn"):
+                    if program_to_migrate in analyzer.programs:
+                        prog_info = analyzer.programs[program_to_migrate]
+                        
+                        with st.spinner(f"🔄 Génération de la migration Spring Boot pour {program_to_migrate}..."):
+                            migration_result = generate_springboot_migration(
+                                prog_info, 
+                                ANTHROPIC_API_KEY,
+                                include_tests=include_tests_spring
+                            )
+                            
+                            st.session_state['springboot_migration_result'] = migration_result
+                            st.session_state['migrated_program_name'] = program_to_migrate
+                            st.success("✅ Migration générée avec succès!")
+                
+                # Affichage des résultats de migration
+                if 'springboot_migration_result' in st.session_state:
+                    migration_res = st.session_state['springboot_migration_result']
+                    prog_name = st.session_state.get('migrated_program_name', 'Programme')
+                    
+                    if not migration_res.get("error", True):
+                        st.markdown("---")
+                        st.markdown(f"### 📦 Code Spring Boot généré pour **{prog_name}**")
+                        
+                        # Tabs pour chaque composant
+                        tabs_spring = st.tabs([
+                            "🗂️ Entity", 
+                            "💾 Repository", 
+                            "⚙️ Service", 
+                            "🌐 Controller",
+                            "📋 DTOs",
+                            "🔧 Config",
+                            "🧪 Tests",
+                            "📦 POM.xml",
+                            "⚙️ application.yml",
+                            "📖 Guide Migration"
+                        ])
+                        
+                        with tabs_spring[0]:
+                            st.markdown("**JPA Entity**")
+                            if migration_res.get("entity"):
+                                st.code(migration_res["entity"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger Entity",
+                                    data=migration_res["entity"],
+                                    file_name=f"{prog_name}Entity.java",
+                                    mime="text/plain",
+                                    key="dl_entity"
+                                )
+                        
+                        with tabs_spring[1]:
+                            st.markdown("**Spring Data Repository**")
+                            if migration_res.get("repository"):
+                                st.code(migration_res["repository"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger Repository",
+                                    data=migration_res["repository"],
+                                    file_name=f"{prog_name}Repository.java",
+                                    mime="text/plain",
+                                    key="dl_repo"
+                                )
+                        
+                        with tabs_spring[2]:
+                            st.markdown("**Service Layer**")
+                            if migration_res.get("service"):
+                                st.code(migration_res["service"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger Service",
+                                    data=migration_res["service"],
+                                    file_name=f"{prog_name}Service.java",
+                                    mime="text/plain",
+                                    key="dl_service"
+                                )
+                        
+                        with tabs_spring[3]:
+                            st.markdown("**REST Controller**")
+                            if migration_res.get("controller"):
+                                st.code(migration_res["controller"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger Controller",
+                                    data=migration_res["controller"],
+                                    file_name=f"{prog_name}Controller.java",
+                                    mime="text/plain",
+                                    key="dl_controller"
+                                )
+                        
+                        with tabs_spring[4]:
+                            st.markdown("**Data Transfer Objects**")
+                            if migration_res.get("dto"):
+                                st.code(migration_res["dto"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger DTOs",
+                                    data=migration_res["dto"],
+                                    file_name=f"{prog_name}DTO.java",
+                                    mime="text/plain",
+                                    key="dl_dto"
+                                )
+                        
+                        with tabs_spring[5]:
+                            st.markdown("**Spring Configuration**")
+                            if migration_res.get("config"):
+                                st.code(migration_res["config"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger Config",
+                                    data=migration_res["config"],
+                                    file_name="ApplicationConfig.java",
+                                    mime="text/plain",
+                                    key="dl_config"
+                                )
+                        
+                        with tabs_spring[6]:
+                            if migration_res.get("tests"):
+                                st.markdown("**Tests Unitaires JUnit 5**")
+                                st.code(migration_res["tests"], language="java")
+                                st.download_button(
+                                    "💾 Télécharger Tests",
+                                    data=migration_res["tests"],
+                                    file_name=f"{prog_name}ServiceTest.java",
+                                    mime="text/plain",
+                                    key="dl_tests"
+                                )
+                            else:
+                                st.info("Tests non générés")
+                        
+                        with tabs_spring[7]:
+                            st.markdown("**Maven POM.xml**")
+                            if migration_res.get("pom"):
+                                st.code(migration_res["pom"], language="xml")
+                                st.download_button(
+                                    "💾 Télécharger POM",
+                                    data=migration_res["pom"],
+                                    file_name="pom.xml",
+                                    mime="text/xml",
+                                    key="dl_pom"
+                                )
+                        
+                        with tabs_spring[8]:
+                            st.markdown("**Configuration Application**")
+                            if migration_res.get("application_yml"):
+                                st.code(migration_res["application_yml"], language="yaml")
+                                st.download_button(
+                                    "💾 Télécharger YML",
+                                    data=migration_res["application_yml"],
+                                    file_name="application.yml",
+                                    mime="text/yaml",
+                                    key="dl_yml"
+                                )
+                        
+                        with tabs_spring[9]:
+                            st.markdown("**Guide de Migration**")
+                            if migration_res.get("migration_guide"):
+                                st.markdown(migration_res["migration_guide"])
+                                st.download_button(
+                                    "💾 Télécharger Guide",
+                                    data=migration_res["migration_guide"],
+                                    file_name=f"MIGRATION_GUIDE_{prog_name}.md",
+                                    mime="text/markdown",
+                                    key="dl_guide"
+                                )
+                        
+                        # Bouton ZIP
+                        st.markdown("---")
+                        if st.button("📦 Télécharger Projet Spring Boot Complet (ZIP)", use_container_width=True, key="dl_zip_spring"):
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                                base = f"{prog_name.lower()}-service/"
+                                src_main = base + "src/main/java/com/migration/"
+                                src_test = base + "src/test/java/com/migration/"
+                                resources = base + "src/main/resources/"
+                                
+                                if migration_res.get("entity"):
+                                    zip_file.writestr(src_main + f"entity/{prog_name}Entity.java", migration_res["entity"])
+                                if migration_res.get("repository"):
+                                    zip_file.writestr(src_main + f"repository/{prog_name}Repository.java", migration_res["repository"])
+                                if migration_res.get("service"):
+                                    zip_file.writestr(src_main + f"service/{prog_name}Service.java", migration_res["service"])
+                                if migration_res.get("controller"):
+                                    zip_file.writestr(src_main + f"controller/{prog_name}Controller.java", migration_res["controller"])
+                                if migration_res.get("dto"):
+                                    zip_file.writestr(src_main + f"dto/{prog_name}DTO.java", migration_res["dto"])
+                                if migration_res.get("config"):
+                                    zip_file.writestr(src_main + "config/ApplicationConfig.java", migration_res["config"])
+                                if migration_res.get("tests"):
+                                    zip_file.writestr(src_test + f"service/{prog_name}ServiceTest.java", migration_res["tests"])
+                                if migration_res.get("pom"):
+                                    zip_file.writestr(base + "pom.xml", migration_res["pom"])
+                                if migration_res.get("application_yml"):
+                                    zip_file.writestr(resources + "application.yml", migration_res["application_yml"])
+                                if migration_res.get("migration_guide"):
+                                    zip_file.writestr(base + "MIGRATION_GUIDE.md", migration_res["migration_guide"])
+                                
+                                readme = f"""# Projet Spring Boot - Migration {prog_name}
+
+        ## Démarrage
+        mvn clean install
+        mvn spring-boot:run
+
+        ## API Documentation
+        http://localhost:8080/swagger-ui.html
+        """
+                                zip_file.writestr(base + "README.md", readme)
+                            
+                            zip_buffer.seek(0)
+                            st.download_button(
+                                "⬇️ TÉLÉCHARGER LE ZIP",
+                                data=zip_buffer.getvalue(),
+                                file_name=f"{prog_name.lower()}-springboot-project.zip",
+                                mime="application/zip",
+                                key="final_dl_zip"
+                            )
+                    else:
+                        st.error(f"❌ Erreur: {migration_res.get('migration_guide', 'Erreur inconnue')}")
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -4245,94 +5369,150 @@ RECOMMANDATIONS PRIORITAIRES:
             st.markdown('</div>', unsafe_allow_html=True)
 # ===================== MODE 8 : CONVERSION COBOL ↔ RPG =====================
 elif mode == TXT["modes"][7]:
-    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-    st.header("⚡ " + T("Conversion Mainframe ↔ RPG(IBM i)", "COBOL ↔ RPG Conversion"))
-    st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.info("🔄 " + T("Conversion bidirectionnelle avec explications", "Bidirectional conversion with explanations"))
-    
+    st.markdown("""
+    <div class="glass-card">
+    """, unsafe_allow_html=True)
+    st.header("Conversion Mainframe RPG/IBM i")
+    st.markdown("</div>", unsafe_allow_html=True)
+    st.info("Conversion bidirectionnelle avec explications")
+
+    # Vérif globale CLAUDE
+    if not CLAUDE_AVAILABLE:
+        st.error("LangChain Anthropic requis : pip install langchain-anthropic")
+        st.stop()
+
     col1, col2 = st.columns(2)
+
+    # Langages supportés
+    all_languages = ['Pseudo-Code', 'COBOL', 'RPG', 'PLI', 'ASM']
     with col1:
-        source_language = st.selectbox("📥 " + T("Source", "Source"), ["COBOL", "RPG","PLI",'ASM'])
+        source_lang = st.selectbox("Source", all_languages, index=0, help="Par défaut sur COBOL")
 
     with col2:
-        target_language = "RPG" if source_language == "COBOL" else "COBOL"
-        #st.selectbox("📤 " + T("Cible", "Target"), [target_language], disabled=False)
-        #target_language = st.selectbox("📥 " + T("Cible", "Target"), ["RPG", "COBOL","PLI",'ASM'])
-        #if source_language == "RPG" :target_language == "COBOL"
-    
-        st.selectbox("📤 " + T("Cible", "Target"), [target_language], disabled=True)
-    
-    st.markdown("---")
-    input_method = st.radio(T("Méthode", "Method"), 
-                           [T("Coller", "Paste"), T("Fichier", "File")], horizontal=True)
-    
-    source_code = ""
-    uploaded_filename = None
-    
-    if T("Fichier", "File") in input_method:
-        uploaded_file = st.file_uploader("📂", type=["cbl", "cob", "rpg", "rpgle", "txt","pli"], key="m8_file")
-        if uploaded_file:
-            source_code = uploaded_file.read().decode('utf-8', errors='ignore')
-            uploaded_filename = uploaded_file.name
-            st.success(f"✅ {uploaded_filename}")
+        target_options = [lang for lang in all_languages if lang != source_lang]
+        target_lang = st.selectbox("Cible", target_options, index=0, help="Option alternative")
+
+    # Sélection du type RPG si cible est RPG
+    rpg_type = None
+    if target_lang == 'RPG':
+        rpg_types = ['RPG Classique (format fixe)', 'RPG IV (mixte)', 'Full Free RPG (libre)']
+        rpg_type = st.selectbox("Type de RPG", rpg_types, index=2, help="Choisissez le format")
     else:
-        source_code = st.text_area(T("Code", "Code"), height=300, key="m8_code")
-    
-    if source_code:
-        with st.expander("👁️ " + T("Aperçu", "Preview"), expanded=False):
-            st.code(source_code, language=source_language.lower())
-    
+        if 'rpg_type' in st.session_state:
+            del st.session_state['rpg_type']
+
+    if source_lang == "Pseudo-Code":
+        st.info(f"🔄 Génération de code {target_lang} depuis Pseudo-Code" + (f" ({rpg_type})" if rpg_type else ""))
+    else:
+        st.info(f"Conversion {source_lang} → {target_lang}" + (f" ({rpg_type})" if rpg_type else ""))
+    # Input code
+    input_method = st.radio("Méthode", ["Coller", "Fichier"], horizontal=True)
+    sourcecode = None
+    uploaded_filename = None
+    if input_method == "Fichier":
+        uploaded_file = st.file_uploader("Choisir fichier", type=['cbl', 'cob', 'rpg', 'rpgle', 'txt', 'pli'], key='m8file')
+        if uploaded_file:
+            sourcecode = uploaded_file.read().decode('utf-8', errors='ignore')
+            uploaded_filename = uploaded_file.name
+            st.success(f"Chargé : {uploaded_filename}")
+    else:
+        sourcecode = st.text_area("Code source", height=300, key='m8code')
+
+    if sourcecode:
+        with st.expander("Aperçu", expanded=False):
+            st.code(sourcecode, language=source_lang.lower())
+
     st.markdown("---")
+
+    # Récupération et validation API key
+    api_key = st.secrets.get("ANTHROPIC_API_KEY", "") if hasattr(st.secrets, 'get') else ""
+    api_key_valid = bool(api_key)
+
+
+
+    if not api_key_valid:
+        with st.expander("Configurer API Key", expanded=True):
+            st.warning("Ajoutez dans ~/.streamlit/secrets.toml :\n\nANTHROPIC_API_KEY = 'sk-ant-votre_cle_ici'")
+            st.info("Obtenez sur https://console.anthropic.com/")
+
     col_btn = st.columns([1, 2, 1])
     with col_btn[1]:
-        convert_btn = st.button(f"⚡ {source_language} → {target_language}", 
-                               type="primary", use_container_width=True, disabled=not source_code, key="m8_conv")
-    
-    if convert_btn and source_code:
-        if not ANTHROPIC_API_KEY:
-            st.error("❌ " + T("Clé API requise", "API key required"))
-        else:
-            with st.spinner("🔄 " + T("Conversion...", "Converting...")):
-                result = convert_cobol_rpg_with_llm(source_code, source_language, target_language, ANTHROPIC_API_KEY)
-                st.session_state.cobol_rpg_result = result
-                st.session_state.cobol_rpg_source_code = source_code
-                st.session_state.cobol_rpg_source_language = source_language
-                st.session_state.cobol_rpg_target_language = target_language
-                st.session_state.cobol_rpg_filename = uploaded_filename or "program"
-                if not result.get('error'):
-                    st.success("✅ " + T("Succès!", "Success!"))
-                    st.rerun()
-    
-    if st.session_state.cobol_rpg_result and not st.session_state.cobol_rpg_result.get('error'):
-        result = st.session_state.cobol_rpg_result
-        st.markdown("---")
-        st.subheader("📊 " + T("Résultats", "Results"))
-        
-        tab1, tab2, tab3 = st.tabs(["💻 Code", "📖 " + T("Explications", "Explanations"), "📥 Download"])
-        
-        with tab1:
-            st.code(result['converted_code'], language=st.session_state.cobol_rpg_target_language.lower())
-            cols = st.columns(3)
-            cols[0].metric(T("Source", "Source"), len(st.session_state.cobol_rpg_source_code.split('\n')))
-            cols[1].metric(T("Généré", "Generated"), len(result['converted_code'].split('\n')))
-            ratio = len(result['converted_code'].split('\n')) / max(len(st.session_state.cobol_rpg_source_code.split('\n')), 1)
-            cols[2].metric("Ratio", f"{ratio:.2f}x")
-        
-        with tab2:
-            st.markdown(result['explanation'])
-        
-        with tab3:
-            base = st.session_state.cobol_rpg_filename.rsplit('.', 1)[0] if '.' in st.session_state.cobol_rpg_filename else st.session_state.cobol_rpg_filename
-            ext = "cbl" if st.session_state.cobol_rpg_target_language == "COBOL" else "rpgle"
-            c1, c2 = st.columns(2)
-            c1.download_button("💾 Code", result['converted_code'], f"{base}.{ext}", key="m8_dl1")
-            report = f"# CONVERSION {st.session_state.cobol_rpg_source_language}→{st.session_state.cobol_rpg_target_language}\n\n{result['explanation']}\n\n``````"
-            c2.download_button("📄 Rapport", report, f"{base}_report.md", key="m8_dl2")
-    
-    elif st.session_state.cobol_rpg_result and st.session_state.cobol_rpg_result.get('error'):
-        st.error(st.session_state.cobol_rpg_result['explanation'])
+        convert_btn = st.button(f"{source_lang} -> {target_lang}", type="primary", use_container_width=True,
+                                disabled=not bool(sourcecode) or not api_key_valid, key='m8conv')
 
+    # Debug: Vérif input
+    if bool(sourcecode):
+        st.info(f"Debug: Sourcecode détecté ({len(sourcecode)} chars)")
+
+    # Debug: Vérif condition bouton
+    condition_met = convert_btn and bool(sourcecode) and api_key_valid
+ 
+
+    if condition_met:
+        st.info("Debug: Bouton cliqué, appel fonction...")
+        # Initialisation si absente
+        if 'cobolrpgresult' not in st.session_state:
+            st.session_state.cobolrpgresult = None
+        try:
+            with st.spinner("Conversion en cours..."):
+                result = convertcobolrpgwithllm(sourcecode, source_lang, target_lang, api_key, rpg_type)
+                st.info(f"Debug: Résultat reçu, type={type(result)}, keys={list(result.keys()) if isinstance(result, dict) else 'N/A'}")
+                st.session_state.cobolrpgresult = result
+                st.session_state.cobolrpgsourcecode = sourcecode
+                st.session_state.cobolrpgsourcelanguage = source_lang
+                st.session_state.cobolrpgtargetlanguage = target_lang
+                st.session_state.cobolrpgfilename = uploaded_filename or "program"
+                st.success("Conversion réussie!")
+        except Exception as e:
+            st.error(f"Debug: Exception = {str(e)}")
+            error_result = {"converted_code": None, "explanation": f"Erreur inattendue : {str(e)}", "raw_code": None, "error": True}
+            st.session_state.cobolrpgresult = error_result
+            st.session_state.cobolrpgsourcecode = sourcecode
+            st.session_state.cobolrpgsourcelanguage = source_lang
+            st.session_state.cobolrpgtargetlanguage = target_lang
+            st.session_state.cobolrpgfilename = uploaded_filename or "program"
+        finally:
+            st.rerun()
+
+    # Affichage des résultats SEULEMENT si une conversion a été faite
+    if 'cobolrpgresult' in st.session_state and st.session_state.cobolrpgresult is not None:
+        result = st.session_state.cobolrpgresult
+        
+        if isinstance(result, dict):
+            if not result.get("error", False):  # Changez True en False ici
+                st.markdown("### Code Converti")
+                display_lang = st.session_state.cobolrpgtargetlanguage.lower()
+                if display_lang == "pli":
+                    display_lang = "sql"  # PLI n'existe pas dans Streamlit, utiliser SQL
+                elif display_lang == "asm":
+                    display_lang = "asm"
+                st.code(result["raw_code"], language=display_lang)
+                st.markdown("### Explications")
+                st.write(result.get("explanation", ""))
+                
+                # Bouton de téléchargement
+                if result.get("raw_code"):
+                    ext = "rpgle" if st.session_state.cobolrpgtargetlanguage == "RPG" else st.session_state.cobolrpgtargetlanguage.lower()
+                    st.download_button(
+                        "Télécharger le code converti",
+                        data=result["raw_code"],
+                        file_name=f"converted.{ext}",
+                        mime="text/plain"
+                    )
+            else:
+                st.error(f"Erreur de conversion : {result.get('explanation', 'Inconnue')}")
+        else:
+            st.error("Résultat invalide (format incorrect)")
+
+
+    # Bouton reset (clés originales)
+    if st.button("Réinitialiser", key='m8reset'):
+        keys_to_reset = ['cobolrpgresult', 'cobolrpgsourcecode', 'cobolrpgsourcelanguage', 'cobolrpgtargetlanguage', 'cobolrpgfilename', 'rpg_type', 'm8code', 'm8file']
+        for key in keys_to_reset:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.success("État réinitialisé!")
+        st.rerun()
 
 # ===================== FOOTER PRO =====================
 st.markdown("""
